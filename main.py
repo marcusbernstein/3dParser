@@ -42,6 +42,7 @@ def main():
     surfaces = detect_flat_surfaces(vertices, triangles)
     print(len(surfaces))
     shapes = recognize_shapes(surfaces, vertices)
+    #identified_3d_shapes = track_extrudes(shapes)
 
     running = True
     while running:
@@ -73,7 +74,7 @@ def main():
         screen.fill(BLACK)
         
         render_stl(screen, vertices, triangles, scale, offset, rotation_matrix)
-        render_shapes(screen, vertices, triangles, shapes, scale, offset, rotation_matrix)
+        render_shapes(screen, vertices, triangles, shapes, scale, offset, rotation_matrix, surfaces)
 
         pygame.display.flip()
         clock.tick(60)
