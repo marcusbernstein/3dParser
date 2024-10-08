@@ -1,173 +1,172 @@
 import numpy as np
-import matplotlib.pyplot as plt
 import cv2
-import math
-import pygame
-import itertools
-from scipy.optimize import leastsq
-from scipy.spatial import KDTree
 from typing import List, Tuple
-from collections import deque
-
 
 
 def detect_flat_surfaces(vertices, triangles, tolerance=1e-6):
-    """Detect flat surfaces from triangles."""
-    print(f"Total triangles: {len(triangles)}")
-
-    # Identify triangles with same dimension (X, Y, or Z) for all vertices
-    coplanar_triangles = {}
+    coplanar_triangles = {} # Identify triangles with same dimension (X, Y, or Z) for all vertices
     for tri in triangles:
         v1, v2, v3 = vertices[tri[0]], vertices[tri[1]], vertices[tri[2]]
-
-        # Check if all vertices have the same value in any dimension
         for dim in range(3):
             if abs(v1[dim] - v2[dim]) < tolerance and abs(v2[dim] - v3[dim]) < tolerance:
                 if dim not in coplanar_triangles:
                     coplanar_triangles[dim] = {}
-                dim_value = round(v1[dim], 6)  # Round to 6 decimal places
+                dim_value = round(v1[dim], 6)
                 if dim_value not in coplanar_triangles[dim]:
                     coplanar_triangles[dim][dim_value] = []
                 coplanar_triangles[dim][dim_value].append(tri)
-
-    # Print coplanar triangles
-    for dim, dim_values in coplanar_triangles.items():
-        print(f"Coplanar triangles in dim {dim}:")
-        for dim_value, triangles in dim_values.items():
-            print(f"  Value {dim_value}: {len(triangles)} triangles")
 
     # Identify flat surfaces
     flat_surfaces = []
     for dim, dim_values in coplanar_triangles.items():
         for dim_value, triangles in dim_values.items():
-            if len(triangles) > 0:  # Check for non-empty triangle list
+            if len(triangles) > 0:
                 flat_surface = []
                 for tri in triangles:
                     flat_surface.extend(tri)
                 flat_surfaces.append(list(set(flat_surface)))
 
-    print(f"Detected flat surfaces: {len(flat_surfaces)}")
     return flat_surfaces
 
+def recognize_shapes(vertices, edges, surfaces):
+    recognized_contours = []
+    recognized_circles = []
 
-
-def recognize_shapes(surfaces, vertices):
-    """
-    Recognize shapes in the 3D model.
-
-    Args:
-    surfaces (List[List[int]]): Surface indices.
-    vertices (List[Tuple[float, float, float]]): 3D model vertices.
-
-    Returns:
-    List[Tuple[str, List[float], int, Tuple[int, int]]]: Recognized shapes with type, dimensions, surface index, and contour coordinates.
-    """
-
-    recognized_shapes = []
     for surface_index, surface in enumerate(surfaces):
-        print(f"Processing surface {surface_index}")
-        # Project vertices to 2D (ignore z-axis)
-        projected_vertices = [(vertices[i][0], vertices[i][1]) for i in surface]
+        surface_vertices_3d = [vertices[i] for i in surface]
         
-        # Convert to numpy array for OpenCV
-        projected_vertices = np.array(projected_vertices)
+        # Calculate surface normal
+        v0 = np.array(surface_vertices_3d[0])
+        v1 = np.array(surface_vertices_3d[1])
+        v2 = np.array(surface_vertices_3d[2])
+        normal = np.cross(v1 - v0, v2 - v0)
+        normal = normal / np.linalg.norm(normal)
         
-        # Check if there are at least 3 points
-        if len(projected_vertices) < 3:
+        # Find the best projection plane (xy, yz, or xz)
+        abs_normal = np.abs(normal)
+        max_component = np.argmax(abs_normal)
+        
+        surface_vertices_2d = [] # Project vertices onto the appropriate plane
+        for vertex in surface_vertices_3d:
+            if max_component == 0:  # Project onto yz plane
+                surface_vertices_2d.append((vertex[1], vertex[2]))
+            elif max_component == 1:  # Project onto xz plane
+                surface_vertices_2d.append((vertex[0], vertex[2]))
+            else:  # Project onto xy plane
+                surface_vertices_2d.append((vertex[0], vertex[1]))
+                
+        surface_vertices_2d = np.array(surface_vertices_2d)
+        
+        surface_edges = [edge for edge in edges if edge[0] in surface and edge[1] in surface]
+        
+        image_size = 1200
+        padding = 50
+        
+        min_x = np.min(surface_vertices_2d[:, 0]) - padding
+        min_y = np.min(surface_vertices_2d[:, 1]) - padding
+        max_x = np.max(surface_vertices_2d[:, 0]) + padding
+        max_y = np.max(surface_vertices_2d[:, 1]) + padding
+        
+        width = max_x - min_x
+        height = max_y - min_y
+        if width == 0 or height == 0:
             continue
+            
+        scale = min(image_size / width, image_size / height) * 0.9
         
-        # Create a blank image
-        min_x, min_y = np.min(projected_vertices, axis=0)
-        max_x, max_y = np.max(projected_vertices, axis=0)
-        image_size = int(max(max_x - min_x, max_y - min_y) * 1.2)
         image = np.zeros((image_size, image_size), np.uint8)
         
-        # Draw contours
-        offset = (image_size // 2, image_size // 2)
-        translated_vertices = (projected_vertices - [min_x, min_y]) + offset
-        translated_vertices = translated_vertices.astype(np.int32)
-        contours, hierarchy = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(image, contours, -1, (0, 255, 0), 1)
-
-        plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        plt.show()
+        transform = {
+            'scale': scale,
+            'min_x': min_x,
+            'min_y': min_y,
+            'max_component': max_component,
+            'image_size': image_size
+        }
         
-        for contour_index, contour in enumerate(contours):
-            area = cv2.contourArea(contour)
-            if area < 1:
-                continue
+        for edge in surface_edges:
+            v1 = surface_vertices_3d[surface.index(edge[0])]
+            v2 = surface_vertices_3d[surface.index(edge[1])]
             
-            epsilon = 0.01 * cv2.arcLength(contour, True)
-            approx = cv2.approxPolyDP(contour, epsilon, True)
-            
-            if len(approx) > 7:
-                shape_type = "Circle"
-            elif (len(approx) <= 7 and len(approx) >4) :
-                shape_type = "Polygon"
-            elif len(approx) == 4:
-                shape_type = "Quad"
-            elif len(approx) == 3:
-                shape_type = "Tri"
+            if max_component == 0:
+                p1 = (v1[1], v1[2])
+                p2 = (v2[1], v2[2])
+            elif max_component == 1:
+                p1 = (v1[0], v1[2])
+                p2 = (v2[0], v2[2])
             else:
-                shape_type = "Unknown"
+                p1 = (v1[0], v1[1])
+                p2 = (v2[0], v2[1])
+                
+            x1 = int((p1[0] - min_x) * scale)
+            y1 = int((p1[1] - min_y) * scale)
+            x2 = int((p2[0] - min_x) * scale)
+            y2 = int((p2[1] - min_y) * scale)
             
-            x, y, w, h = cv2.boundingRect(contour)
-            dimensions = [w/100, h/100]
-            
-            # Get contour coordinates
-            contour_coords = tuple(map(tuple, contour.squeeze().tolist()))
-            
-            recognized_shapes.append((shape_type, dimensions, surface_index, contour_coords))
-            print(f"Shape identified: {shape_type} on surface {surface_index} with dimensions {dimensions} at contour {contour_coords}")
+            cv2.line(image, (x1, y1), (x2, y2), 255, 2)
+        
+        contours, hierarchy = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        
+        surface_contours = []
+        surface_circles = []
+        
+        if len(contours) > 0 and hierarchy is not None:
+            for idx, (contour, h) in enumerate(zip(contours, hierarchy[0])):
+                if len(contour) < 4:
+                    continue
+                
+                perimeter = cv2.arcLength(contour, True)
+                area = cv2.contourArea(contour)
+                
+                if area < 100: 
+                    continue
+                
+                circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
+                
+                if circularity > 0.85: # If circle
+                    (x, y), radius = cv2.minEnclosingCircle(contour)
+                    # Transform back to 3D space
+                    orig_x = x / scale + min_x
+                    orig_y = y / scale + min_y
+                    orig_radius = radius / scale
+                    surface_circles.append((orig_x, orig_y, orig_radius))
+                else:  # If polygon
+                    epsilon = 0.02 * perimeter # Approximate the contour to reduce noise
+                    approx = cv2.approxPolyDP(contour, epsilon, True)
+                    
+                    if len(approx) > 3: # I hate triangless!
+                        contour_points = []
+                        for point in approx:
+                            x, y = point[0]
+                            orig_x = x / scale + min_x
+                            orig_y = y / scale + min_y
+                            
+                            if max_component == 0:
+                                point_3d = (vertices[surface[0]][0], orig_x, orig_y)
+                            elif max_component == 1:
+                                point_3d = (orig_x, vertices[surface[0]][1], orig_y)
+                            else:
+                                point_3d = (orig_x, orig_y, vertices[surface[0]][2])
+                            
+                            contour_points.append((point_3d[0], point_3d[1]))
+                        
+                        surface_contours.append({ # Store hierarchy information with the contour
+                            'points': contour_points,
+                            'parent': h[3],  # Parent contour index
+                            'is_hole': h[3] != -1  # True if this contour has a parent
+                        })
+        
+        recognized_contours.append(surface_contours)
+        recognized_circles.append(surface_circles)
+        
+    return recognized_contours, recognized_circles
+
+def transform_point(x, y, transform):
+    scale = transform['scale']
+    center_x = transform['center_x']
+    center_y = transform['center_y']
+    image_size = transform['image_size']
     
-    print(f"Total shapes identified: {len(recognized_shapes)}")
-    
-    return recognized_shapes
-
-"""def track_extrudes(recognized_shapes, tolerance=0.01):
-    ""
-    Track recognized shapes across flat surfaces to detect extrusions.
-
-    Args:
-    recognized_shapes (List[Tuple[str, List[float], int]]): Recognized shapes with type, dimensions, and surface index.
-    tolerance (float, optional): Tolerance for shape matching. Defaults to 0.01.
-
-    Returns:
-    List[Tuple[str, List[int]]]: Identified 3D shapes with their surface indices.
-    ""
-
-    # Initialize a list to store identified 3D shapes
-    identified_3d_shapes = []
-
-    # Iterate over recognized shape types
-    shape_types = set(shape[0] for shape in recognized_shapes)
-    for shape_type in shape_types:
-        # Filter shapes by type
-        type_shapes = [shape for shape in recognized_shapes if shape[0] == shape_type]
-
-        # Group surfaces by their dimensions
-        dimension_groups = {}
-        for shape in type_shapes:
-            dimensions = tuple(shape[1])  # Use tuple to make dimensions hashable
-            surface = shape[2]
-            if dimensions not in dimension_groups:
-                dimension_groups[dimensions] = []
-            dimension_groups[dimensions].append(surface)
-
-        # Identify 3D shape for each dimension group
-        for dimensions, surfaces in dimension_groups.items():
-            if len(surfaces) > 1:
-                if shape_type == "Circle":
-                    identified_3d_shapes.append(("Cylinder", surfaces))
-                elif shape_type == "Triangle":
-                    identified_3d_shapes.append(("Prism", surfaces))
-                elif shape_type == "Quad":
-                    identified_3d_shapes.append(("Box", surfaces))
-                else:
-                    identified_3d_shapes.append((f"Extruded {shape_type}", surfaces))
-
-    print("Identified 3D Shapes:")
-    for shape_type, surfaces in identified_3d_shapes:
-        print(f"{shape_type} found on {len(surfaces)} surfaces")
-
-    return identified_3d_shapes"""
+    px = int((x - center_x) * scale + image_size // 2)
+    py = int((y - center_y) * scale + image_size // 2)
+    return (px, py)

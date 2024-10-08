@@ -1,21 +1,11 @@
 import pygame
-import math
 import numpy as np
 from constants import *
-from detection.py import *
-
-def project_vertex(vertex, scale, offset):
-    """Project 3D vertex to 2D screen coordinates."""
-    x = vertex[0] * scale + offset[0]
-    y = -vertex[2] * scale + offset[1]
-    return (x, y)
 
 def render_stl(screen, vertices, triangles, scale, offset, rotation_matrix):
     rotated_vertices = [np.dot(rotation_matrix, vertex) for vertex in vertices]
     projected_vertices = [(int(vertex[0] * scale + offset[0]), int(-vertex[2] * scale + offset[1]))
                           for vertex in rotated_vertices]
-    print("projected_vertices")
-    print(projected_vertices)
     for vertex in projected_vertices:
         pygame.draw.circle(screen, WHITE, vertex, 2)
     for triangle in triangles:
@@ -23,58 +13,55 @@ def render_stl(screen, vertices, triangles, scale, offset, rotation_matrix):
         pygame.draw.line(screen, WHITE, projected_vertices[v1], projected_vertices[v2], 2)
         pygame.draw.line(screen, WHITE, projected_vertices[v2], projected_vertices[v3], 2)
         pygame.draw.line(screen, WHITE, projected_vertices[v3], projected_vertices[v1], 2)
-def render_shapes(screen, vertices, triangles, shapes, scale, offset, rotation_matrix):
-    """
-    Render recognized shapes on the screen.
 
-    Args:
-    screen: Pygame screen object.
-    vertices: List[Tuple[float, float, float]]: 3D model vertices.
-    triangles: List[List[int]]: 3D model triangles.
-    shapes: List[Tuple[str, List[float], int, Tuple[int, int]]]: Recognized shapes.
-    scale: float: Scaling factor.
-    offset: Tuple[float, float]: Offset coordinates.
-    rotation_matrix: numpy.ndarray: Rotation matrix.
-    """
 
-    # Render 3D model
-    for triangle in triangles:
-        point1 = np.dot(rotation_matrix, vertices[triangle[0]])
-        point2 = np.dot(rotation_matrix, vertices[triangle[1]])
-        point3 = np.dot(rotation_matrix, vertices[triangle[2]])
+def render_shapes(screen, vertices, surfaces, recognized_contours, recognized_circles, scale, offset, rotation_matrix):
+    for surface_index, surface in enumerate(surfaces):        
+        # Get and rotate surface vertices
+        surface_vertices = [vertices[i] for i in surface]
+        rotated_surface_vertices = [np.dot(rotation_matrix, v) for v in surface_vertices]
         
-        x1, y1, _ = point1
-        x2, y2, _ = point2
-        x3, y3, _ = point3
-        
-        x1, y1 = int(x1 * scale + offset[0]), int(y1 * scale + offset[1])
-        x2, y2 = int(x2 * scale + offset[0]), int(y2 * scale + offset[1])
-        x3, y3 = int(x3 * scale + offset[0]), int(y3 * scale + offset[1])
-        
-        pygame.draw.polygon(screen, (255, 255, 255), [(x1, y1), (x2, y2), (x3, y3)], 1)
+        for contour in recognized_contours[surface_index]: # Render contours
 
-    # Calculate projected vertices
-    rotated_vertices = [np.dot(rotation_matrix, vertex) for vertex in vertices]
-    projected_vertices = [(int(vertex[0] * scale + offset[0]), int(-vertex[2] * scale + offset[1]))
-                          for vertex in rotated_vertices]
-
-    # Render recognized shapes
-    for shape_type, dimensions, surface_index, contour_coords in shapes:
-        color = (255, 0, 0)  # Red color for shapes
+            # Transform contour points to screen space
+            transformed_points = []
+            for point in contour['points']:
+                z = vertices[surface[0]][2]  # Use Z from first vertex in surface
+                point_3d = np.array([point[0], point[1], z])
+                
+                # Apply rotation
+                rotated_point = np.dot(rotation_matrix, point_3d)
+                
+                # Project to screen space
+                screen_x = int(rotated_point[0] * scale + offset[0])
+                screen_y = int(-rotated_point[2] * scale + offset[1])
+                transformed_points.append((screen_x, screen_y))
+            
+            if len(transformed_points) > 1:
+                color = (255, 0, 0) if contour['is_hole'] else (0, 255, 0)
+                pygame.draw.lines(screen, color, True, transformed_points, 2)
         
-        # Project contour coordinates
-        projected_contour = []
-        for point in contour_coords:
-            vertex_index = surface_index * 3 + point[1]
-            vertex = vertices[vertex_index]
-            projected_point = np.dot(rotation_matrix, vertex)
-            x, y, _ = projected_point
-            x, y = int(x * scale + offset[0]), int(y * scale + offset[1])
-            projected_contour.append((x, y))
-        
-        pygame.draw.polygon(screen, color, projected_contour, 2)
-        font = pygame.font.Font(None, 24)
-        text = font.render(shape_type, True, color)
-        screen.blit(text, (projected_contour[0][0], projected_contour[0][1] - 20))
+        for circle in recognized_circles[surface_index]: # Render circles
 
-    pygame.display.flip()
+            x, y, radius = circle
+            # Calculate circle center point using rotated surface vertices
+            center_x = sum(v[0] for v in rotated_surface_vertices) / len(rotated_surface_vertices)
+            center_y = sum(v[1] for v in rotated_surface_vertices) / len(rotated_surface_vertices)
+            center_z = sum(v[2] for v in rotated_surface_vertices) / len(rotated_surface_vertices)
+            
+            # Project circle center
+            projected_center_x = int(center_x * scale + offset[0])
+            projected_center_y = int(-center_z * scale + offset[1])
+            
+            # Calculate ellipse dimensions considering rotation and scale
+            normal_vector = [0, 0, 1]  # Z-axis normal vector
+            rotated_normal_vector = np.dot(rotation_matrix, normal_vector)
+            ellipse_major_axis = radius * scale
+            ellipse_minor_axis = radius * scale * abs(rotated_normal_vector[1])
+            
+            # Draw projected ellipse
+            pygame.draw.ellipse(screen, (0, 0, 255), 
+                              (projected_center_x - ellipse_major_axis, 
+                               projected_center_y - ellipse_minor_axis, 
+                               2 * ellipse_major_axis, 
+                               2 * ellipse_minor_axis), 2)
