@@ -1,67 +1,126 @@
 import pygame
 import numpy as np
-from constants import *
 
 def render_stl(screen, vertices, triangles, scale, offset, rotation_matrix):
     rotated_vertices = [np.dot(rotation_matrix, vertex) for vertex in vertices]
     projected_vertices = [(int(vertex[0] * scale + offset[0]), int(-vertex[2] * scale + offset[1]))
                           for vertex in rotated_vertices]
+    
     for vertex in projected_vertices:
-        pygame.draw.circle(screen, WHITE, vertex, 2)
+        pygame.draw.circle(screen, (255, 255, 255), vertex, 2)
+    
     for triangle in triangles:
         v1, v2, v3 = triangle
-        pygame.draw.line(screen, WHITE, projected_vertices[v1], projected_vertices[v2], 2)
-        pygame.draw.line(screen, WHITE, projected_vertices[v2], projected_vertices[v3], 2)
-        pygame.draw.line(screen, WHITE, projected_vertices[v3], projected_vertices[v1], 2)
-
-
-def render_shapes(screen, vertices, surfaces, recognized_contours, recognized_circles, scale, offset, rotation_matrix):
-    for surface_index, surface in enumerate(surfaces):        
-        # Get and rotate surface vertices
-        surface_vertices = [vertices[i] for i in surface]
-        rotated_surface_vertices = [np.dot(rotation_matrix, v) for v in surface_vertices]
+        pygame.draw.line(screen, (255, 255, 255), projected_vertices[v1], projected_vertices[v2], 2)
+        pygame.draw.line(screen, (255, 255, 255), projected_vertices[v2], projected_vertices[v3], 2)
+        pygame.draw.line(screen, (255, 255, 255), projected_vertices[v3], projected_vertices[v1], 2)
         
-        for contour in recognized_contours[surface_index]: # Render contours
-
-            # Transform contour points to screen space
-            transformed_points = []
-            for point in contour['points']:
-                z = vertices[surface[0]][2]  # Use Z from first vertex in surface
-                point_3d = np.array([point[0], point[1], z])
-                
-                # Apply rotation
-                rotated_point = np.dot(rotation_matrix, point_3d)
-                
-                # Project to screen space
-                screen_x = int(rotated_point[0] * scale + offset[0])
-                screen_y = int(-rotated_point[2] * scale + offset[1])
-                transformed_points.append((screen_x, screen_y))
-            
-            if len(transformed_points) > 1:
-                color = (255, 0, 0) if contour['is_hole'] else (0, 255, 0)
-                pygame.draw.lines(screen, color, True, transformed_points, 2)
+def render_sketch_planes(screen, vertices, sketch_planes, scale, offset, rotation_matrix, padding=5):
+    for axis, plane_magnitude, covered_vertices in sketch_planes:
+        # Extract the vertices on this sketch plane
+        plane_vertices = np.array([vertices[v] for v in covered_vertices])
         
-        for circle in recognized_circles[surface_index]: # Render circles
+        # Find the minimum and maximum coordinates for the other two axes (not on the plane axis)
+        min_coords = np.min(plane_vertices, axis=0)
+        max_coords = np.max(plane_vertices, axis=0)
+        center = (min_coords + max_coords) / 2
 
-            x, y, radius = circle
-            # Calculate circle center point using rotated surface vertices
-            center_x = sum(v[0] for v in rotated_surface_vertices) / len(rotated_surface_vertices)
-            center_y = sum(v[1] for v in rotated_surface_vertices) / len(rotated_surface_vertices)
-            center_z = sum(v[2] for v in rotated_surface_vertices) / len(rotated_surface_vertices)
-            
-            # Project circle center
-            projected_center_x = int(center_x * scale + offset[0])
-            projected_center_y = int(-center_z * scale + offset[1])
-            
-            # Calculate ellipse dimensions considering rotation and scale
-            normal_vector = [0, 0, 1]  # Z-axis normal vector
-            rotated_normal_vector = np.dot(rotation_matrix, normal_vector)
-            ellipse_major_axis = radius * scale
-            ellipse_minor_axis = radius * scale * abs(rotated_normal_vector[1])
-            
-            # Draw projected ellipse
-            pygame.draw.ellipse(screen, (0, 0, 255), 
-                              (projected_center_x - ellipse_major_axis, 
-                               projected_center_y - ellipse_minor_axis, 
-                               2 * ellipse_major_axis, 
-                               2 * ellipse_minor_axis), 2)
+        # Add padding
+        min_coords -= padding
+        max_coords += padding
+
+        # Create a rectangle (4 corners) based on the axis of the sketch plane
+        if axis == 'x':
+            # Plane parallel to YZ, at x = plane_magnitude
+            rectangle = [
+                [plane_magnitude, min_coords[1], min_coords[2]],  # Bottom-left
+                [plane_magnitude, max_coords[1], min_coords[2]],  # Top-left
+                [plane_magnitude, max_coords[1], max_coords[2]],  # Top-right
+                [plane_magnitude, min_coords[1], max_coords[2]],  # Bottom-right
+                [plane_magnitude, center[0], center[1]] # center   # Bottom-right
+            ]
+        elif axis == 'y':
+            # Plane parallel to XZ, at y = plane_magnitude
+            rectangle = [
+                [min_coords[0], plane_magnitude, min_coords[2]],  # Bottom-left
+                [max_coords[0], plane_magnitude, min_coords[2]],  # Top-left
+                [max_coords[0], plane_magnitude, max_coords[2]],  # Top-right
+                [min_coords[0], plane_magnitude, max_coords[2]],  # Bottom-right
+                [center[0], plane_magnitude, center[1]] # center   # Bottom-right
+            ]
+        elif axis == 'z':
+            # Plane parallel to XY, at z = plane_magnitude
+            rectangle = [
+                [min_coords[0], min_coords[1], plane_magnitude],  # Bottom-left
+                [max_coords[0], min_coords[1], plane_magnitude],  # Top-left
+                [max_coords[0], max_coords[1], plane_magnitude],  # Top-right
+                [min_coords[0], max_coords[1], plane_magnitude],  # Bottom-right
+                [center[0], center[1], plane_magnitude] # center
+            ]
+
+        # Rotate the rectangle points
+        rotated_rectangle = [np.dot(rotation_matrix, point) for point in rectangle]
+
+        # Project the rotated 3D rectangle to 2D space
+        projected_rectangle = [(int(point[0] * scale + offset[0]), int(-point[2] * scale + offset[1]))
+                               for point in rotated_rectangle]
+
+        # Draw the rectangle as a parallelogram (connect the points)
+        pygame.draw.line(screen, (0, 255, 0), projected_rectangle[0], projected_rectangle[1], 2)  # Bottom edge
+        pygame.draw.line(screen, (0, 255, 0), projected_rectangle[1], projected_rectangle[2], 2)  # Right edge
+        pygame.draw.line(screen, (0, 255, 0), projected_rectangle[2], projected_rectangle[3], 2)  # Top edge
+        pygame.draw.line(screen, (0, 255, 0), projected_rectangle[3], projected_rectangle[0], 2)  # Left edge     
+        pygame.draw.circle(screen, (0, 255, 0), projected_rectangle[4], 3)
+
+def render_extrudes(screen, extrude_data, vertices, scale, offset, rotation_matrix):
+    colors = [(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0), (255, 0, 255), (0, 255, 255)]
+
+    for i, extrude in enumerate(extrude_data['extrudes']):
+        color = colors[i % len(colors)]
+
+        # Calculate centerpoints
+        start_vertices = [vertices[idx] for idx, _ in extrude['matching_vertices']]
+        end_vertices = [vertices[idx] for _, idx in extrude['matching_vertices']]
+
+        start_center = np.mean(start_vertices, axis=0)
+        end_center = np.mean(end_vertices, axis=0)
+
+        # Rotate and project points
+        rotated_start = np.dot(rotation_matrix, start_center)
+        rotated_end = np.dot(rotation_matrix, end_center)
+
+        projected_start = (int(rotated_start[0] * scale + offset[0]), int(-rotated_start[2] * scale + offset[1]))
+        projected_end = (int(rotated_end[0] * scale + offset[0]), int(-rotated_end[2] * scale + offset[1]))
+
+        # Draw extrude line
+        pygame.draw.line(screen, color, projected_start, projected_end, 2)
+
+        # Draw points at start and end
+        pygame.draw.circle(screen, color, projected_start, 4)
+        pygame.draw.circle(screen, color, projected_end, 4)
+
+def extrude_characterize(extrude_data: dict):
+    """
+    Render the detected extrudes and print debug information.
+
+    Args:
+        extrude_data (dict): Dictionary containing extrudes and debug information.
+    """
+    print("Debug Information:")
+    for line in extrude_data['debug_info']:
+        print(line)
+
+    print("\nDetected Extrudes:")
+    for i, extrude in enumerate(extrude_data['extrudes']):
+        print(f"Extrude {i + 1}:")
+        print(f"  Start: {extrude['start_plane']}")
+        print(f"  End: {extrude['end_plane']}")
+        print(f"  Direction: {extrude['direction']}")
+        print(f"  Distance: {extrude['distance']}")
+        print(f"  Vertices: {extrude['vertex_count']}")
+
+    if not extrude_data['extrudes']:
+        print("No extrudes detected.")
+
+    # Placeholder for future rendering logic
+    print("\nPlaceholder: Actual rendering of extrudes would happen here.")

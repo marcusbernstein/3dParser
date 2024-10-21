@@ -1,172 +1,145 @@
 import numpy as np
-import cv2
-from typing import List, Tuple
+from rendering import *
+from collections import defaultdict
 
+def detect_flat_surfaces(vertices: np.ndarray, triangles: list, tolerance: float = 1e-5) -> dict:
+    planes_x = set()
+    planes_y = set()
+    planes_z = set()
 
-def detect_flat_surfaces(vertices, triangles, tolerance=1e-6):
-    coplanar_triangles = {} # Identify triangles with same dimension (X, Y, or Z) for all vertices
-    for tri in triangles:
-        v1, v2, v3 = vertices[tri[0]], vertices[tri[1]], vertices[tri[2]]
-        for dim in range(3):
-            if abs(v1[dim] - v2[dim]) < tolerance and abs(v2[dim] - v3[dim]) < tolerance:
-                if dim not in coplanar_triangles:
-                    coplanar_triangles[dim] = {}
-                dim_value = round(v1[dim], 6)
-                if dim_value not in coplanar_triangles[dim]:
-                    coplanar_triangles[dim][dim_value] = []
-                coplanar_triangles[dim][dim_value].append(tri)
+    # Check all vertices and group them by rounded X, Y, or Z magnitudes
+    for vertex in vertices:
+        x, y, z = vertex
+        planes_x.add(x)  # Group similar X magnitudes
+        planes_y.add(y)  # Group similar Y magnitudes
+        planes_z.add(z)  # Group similar Z magnitudes
 
-    # Identify flat surfaces
-    flat_surfaces = []
-    for dim, dim_values in coplanar_triangles.items():
-        for dim_value, triangles in dim_values.items():
-            if len(triangles) > 0:
-                flat_surface = []
-                for tri in triangles:
-                    flat_surface.extend(tri)
-                flat_surfaces.append(list(set(flat_surface)))
+    # Remove planes where only a few points lie (like single-point planes)
+    def filter_planes(axis_planes, axis_index):
+        flat_planes = []
+        for plane in axis_planes:
+            points_in_plane = [vertex for vertex in vertices if (abs(vertex[axis_index]) - plane) < tolerance]
+            if len(points_in_plane) > 3:  # Only consider planes with more than 3 points
+                flat_planes.append(plane)
+        return flat_planes
 
+    # Detect flat surfaces on X, Y, Z axes
+    flat_surfaces = {
+        'x': filter_planes(planes_x, axis_index=0),
+        'y': filter_planes(planes_y, axis_index=1),
+        'z': filter_planes(planes_z, axis_index=2)
+    }
     return flat_surfaces
 
-def recognize_shapes(vertices, edges, surfaces):
-    recognized_contours = []
-    recognized_circles = []
+def detect_sketch_planes(flat_surfaces: dict, vertices: np.ndarray, tolerance=1e-5) -> list:
+    candidate_planes = []
 
-    for surface_index, surface in enumerate(surfaces):
-        surface_vertices_3d = [vertices[i] for i in surface]
-        
-        # Calculate surface normal
-        v0 = np.array(surface_vertices_3d[0])
-        v1 = np.array(surface_vertices_3d[1])
-        v2 = np.array(surface_vertices_3d[2])
-        normal = np.cross(v1 - v0, v2 - v0)
-        normal = normal / np.linalg.norm(normal)
-        
-        # Find the best projection plane (xy, yz, or xz)
-        abs_normal = np.abs(normal)
-        max_component = np.argmax(abs_normal)
-        
-        surface_vertices_2d = [] # Project vertices onto the appropriate plane
-        for vertex in surface_vertices_3d:
-            if max_component == 0:  # Project onto yz plane
-                surface_vertices_2d.append((vertex[1], vertex[2]))
-            elif max_component == 1:  # Project onto xz plane
-                surface_vertices_2d.append((vertex[0], vertex[2]))
-            else:  # Project onto xy plane
-                surface_vertices_2d.append((vertex[0], vertex[1]))
-                
-        surface_vertices_2d = np.array(surface_vertices_2d)
-        
-        surface_edges = [edge for edge in edges if edge[0] in surface and edge[1] in surface]
-        
-        image_size = 1200
-        padding = 50
-        
-        min_x = np.min(surface_vertices_2d[:, 0]) - padding
-        min_y = np.min(surface_vertices_2d[:, 1]) - padding
-        max_x = np.max(surface_vertices_2d[:, 0]) + padding
-        max_y = np.max(surface_vertices_2d[:, 1]) + padding
-        
-        width = max_x - min_x
-        height = max_y - min_y
-        if width == 0 or height == 0:
-            continue
-            
-        scale = min(image_size / width, image_size / height) * 0.9
-        
-        image = np.zeros((image_size, image_size), np.uint8)
-        
-        transform = {
-            'scale': scale,
-            'min_x': min_x,
-            'min_y': min_y,
-            'max_component': max_component,
-            'image_size': image_size
-        }
-        
-        for edge in surface_edges:
-            v1 = surface_vertices_3d[surface.index(edge[0])]
-            v2 = surface_vertices_3d[surface.index(edge[1])]
-            
-            if max_component == 0:
-                p1 = (v1[1], v1[2])
-                p2 = (v2[1], v2[2])
-            elif max_component == 1:
-                p1 = (v1[0], v1[2])
-                p2 = (v2[0], v2[2])
-            else:
-                p1 = (v1[0], v1[1])
-                p2 = (v2[0], v2[1])
-                
-            x1 = int((p1[0] - min_x) * scale)
-            y1 = int((p1[1] - min_y) * scale)
-            x2 = int((p2[0] - min_x) * scale)
-            y2 = int((p2[1] - min_y) * scale)
-            
-            cv2.line(image, (x1, y1), (x2, y2), 255, 2)
-        
-        contours, hierarchy = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        
-        surface_contours = []
-        surface_circles = []
-        
-        if len(contours) > 0 and hierarchy is not None:
-            for idx, (contour, h) in enumerate(zip(contours, hierarchy[0])):
-                if len(contour) < 4:
-                    continue
-                
-                perimeter = cv2.arcLength(contour, True)
-                area = cv2.contourArea(contour)
-                
-                if area < 100: 
-                    continue
-                
-                circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0
-                
-                if circularity > 0.85: # If circle
-                    (x, y), radius = cv2.minEnclosingCircle(contour)
-                    # Transform back to 3D space
-                    orig_x = x / scale + min_x
-                    orig_y = y / scale + min_y
-                    orig_radius = radius / scale
-                    surface_circles.append((orig_x, orig_y, orig_radius))
-                else:  # If polygon
-                    epsilon = 0.02 * perimeter # Approximate the contour to reduce noise
-                    approx = cv2.approxPolyDP(contour, epsilon, True)
-                    
-                    if len(approx) > 3: # I hate triangless!
-                        contour_points = []
-                        for point in approx:
-                            x, y = point[0]
-                            orig_x = x / scale + min_x
-                            orig_y = y / scale + min_y
-                            
-                            if max_component == 0:
-                                point_3d = (vertices[surface[0]][0], orig_x, orig_y)
-                            elif max_component == 1:
-                                point_3d = (orig_x, vertices[surface[0]][1], orig_y)
-                            else:
-                                point_3d = (orig_x, orig_y, vertices[surface[0]][2])
-                            
-                            contour_points.append((point_3d[0], point_3d[1]))
-                        
-                        surface_contours.append({ # Store hierarchy information with the contour
-                            'points': contour_points,
-                            'parent': h[3],  # Parent contour index
-                            'is_hole': h[3] != -1  # True if this contour has a parent
-                        })
-        
-        recognized_contours.append(surface_contours)
-        recognized_circles.append(surface_circles)
-        
-    return recognized_contours, recognized_circles
+    for axis, planes in flat_surfaces.items():
+        for plane in planes:
+            # Find the vertices that lie on this plane, applying rounding and tolerance
+            if axis == 'x':
+                plane_vertices = [i for i, v in enumerate(vertices) if abs(v[0] - plane) < tolerance]
+            elif axis == 'y':
+                plane_vertices = [i for i, v in enumerate(vertices) if abs(v[1] - plane) < tolerance]
+            elif axis == 'z':
+                plane_vertices = [i for i, v in enumerate(vertices) if abs(v[2] - plane) < tolerance]
 
-def transform_point(x, y, transform):
-    scale = transform['scale']
-    center_x = transform['center_x']
-    center_y = transform['center_y']
-    image_size = transform['image_size']
+            if len(plane_vertices) > 3:  # Only consider flat surfaces with more than 3 vertices
+                candidate_planes.append((axis, plane, plane_vertices))
+
+    # Sort candidate planes by the number of vertices they cover, in descending order
+    candidate_planes.sort(key=lambda p: len(p[2]), reverse=True)
+
+    # Set to track the vertices that have been covered
+    covered_vertices = set()
+    sketch_planes = []
+
+    # Greedily select planes until all relevant vertices are covered
+    for plane in candidate_planes:
+        axis, magnitude, plane_vertices = plane
+
+        # Find the vertices that are not yet covered
+        uncovered_vertices = [v for v in plane_vertices if v not in covered_vertices]
+        if uncovered_vertices:  # Only select the plane if it covers new vertices
+            sketch_planes.append(plane)
+            covered_vertices.update(uncovered_vertices)
+
+        # Stop if we've covered all relevant vertices
+        if len(covered_vertices) == len(vertices):
+            break
+
+    print("sketch_planes")
+    print(len(sketch_planes))
+    print(sketch_planes)
+    return sketch_planes
+
+def detect_extrudes(sketch_planes: list, vertices: np.ndarray, tolerance: float = 1e-5) -> dict:
+    # Sort sketch planes by axis, then by magnitude
+    sorted_planes = sorted(sketch_planes, key=lambda x: (x[0], x[1]))
     
-    px = int((x - center_x) * scale + image_size // 2)
-    py = int((y - center_y) * scale + image_size // 2)
-    return (px, py)
+    extrudes = []
+    debug_info = []
+
+    debug_info.append(f"Total number of sketch planes: {len(sorted_planes)}")
+    for i, (axis, magnitude, plane_vertices) in enumerate(sorted_planes):
+        debug_info.append(f"Plane {i}: axis={axis}, magnitude={magnitude}, vertices={len(plane_vertices)}")
+
+    # Group vertices by their x,y coordinates for each plane
+    plane_vertex_groups = []
+    for axis, magnitude, plane_vertex_indices in sorted_planes:
+        vertex_groups = defaultdict(list)
+        for idx in plane_vertex_indices:
+            v = vertices[idx]
+            key = (round(v[0]/tolerance), round(v[1]/tolerance))  # Round to handle floating point imprecision
+            vertex_groups[key].append(idx)
+        plane_vertex_groups.append((axis, magnitude, vertex_groups))
+
+    for i, (axis1, magnitude1, vertices1) in enumerate(plane_vertex_groups):
+        for j in range(i+1, len(plane_vertex_groups)):
+            axis2, magnitude2, vertices2 = plane_vertex_groups[j]
+            
+            if axis1 != axis2:
+                continue  # Only consider planes on the same axis
+
+            debug_info.append(f"\nComparing planes:")
+            debug_info.append(f"  Plane 1: axis={axis1}, magnitude={magnitude1}, vertex groups={len(vertices1)}")
+            debug_info.append(f"  Plane 2: axis={axis2}, magnitude={magnitude2}, vertex groups={len(vertices2)}")
+
+            # Find matching vertex pairs
+            matching_pairs = []
+            for key in set(vertices1.keys()) & set(vertices2.keys()):
+                for idx1 in vertices1[key]:
+                    for idx2 in vertices2[key]:
+                        matching_pairs.append((idx1, idx2))
+
+            debug_info.append(f"  Matching vertex pairs: {len(matching_pairs)}")
+
+            if len(matching_pairs) >= 3:
+                # Potential extrude found
+                direction = 1 if magnitude2 > magnitude1 else -1
+                distance = abs(magnitude2 - magnitude1)
+
+                extrude_info = {
+                    'start_plane': (axis1, magnitude1),
+                    'end_plane': (axis2, magnitude2),
+                    'direction': direction,
+                    'distance': distance,
+                    'matching_vertices': matching_pairs,
+                    'vertex_count': len(matching_pairs)
+                }
+
+                extrudes.append(extrude_info)
+
+                debug_info.append(f"Extrude detected:")
+                debug_info.append(f"  Start plane: {axis1}-axis, magnitude {magnitude1}")
+                debug_info.append(f"  End plane: {axis2}-axis, magnitude {magnitude2}")
+                debug_info.append(f"  Direction: {direction}")
+                debug_info.append(f"  Distance: {distance}")
+                debug_info.append(f"  Matching vertices: {len(matching_pairs)}")
+            else:
+                debug_info.append("  No extrude detected between these planes.")
+
+    return {
+        'extrudes': extrudes,
+        'debug_info': debug_info
+    }
