@@ -28,7 +28,6 @@ def calculate_rotation_matrix(angle_x, angle_y, angle_z):
 def main():
     pygame.init()
     screen = pygame.display.set_mode((width, height))
-    font = pygame.font.Font(None, 24)
     
     rotation_x = 0
     rotation_y = 0
@@ -38,6 +37,10 @@ def main():
     sketch_planes = detect_sketch_planes(flat_surfaces, vertices)
     sketch_plane_edges = detect_sketch_plane_edges(sketch_planes, edges, vertices)
     extrudes = detect_extrudes(sketch_planes, vertices)
+    #BUILDER
+    sketches = build_sketches(sketch_planes, sketch_plane_edges, extrudes, vertices)
+    extrudes = build_extrudes(extrudes, sketches, vertices)
+
     
     num_features = max(len(sketch_planes), len(extrudes['extrudes']), 25)
     colors = create_color_scheme(num_features)
@@ -60,13 +63,14 @@ def main():
 
         rotation_matrix = calculate_rotation_matrix(rotation_x, rotation_y, rotation_z)
         screen.fill((0, 0, 0))
-        render_feature_tree(screen, extrudes, colors)
+        render_feature_tree(screen, extrudes, sketches, colors)
 
         render_stl(screen, vertices, triangles, scale, right_offset, rotation_matrix)
-        render_sketch_planes(screen, vertices, sketch_planes, scale, left_offset, rotation_matrix, colors)
-        render_sketch_contours(screen, vertices, sketch_plane_edges, scale, left_offset, rotation_matrix)
+        render_sketch_planes(screen, vertices, sketches, scale, left_offset, rotation_matrix, colors)
+        #render_sketch_contours(screen, vertices, sketch_plane_edges, extrudes, scale, left_offset, rotation_matrix, colors)
         render_edges(screen, vertices, edges, scale, left_offset, rotation_matrix)
         render_extrudes(screen, extrudes, vertices, scale, left_offset, rotation_matrix, colors)
+        render_sketches(screen, sketches, colors)
 
         pygame.display.flip()
         pygame.time.Clock().tick(60)
