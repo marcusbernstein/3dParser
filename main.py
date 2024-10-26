@@ -1,4 +1,5 @@
 import pygame
+import pygame.freetype
 import math
 import numpy as np
 from detection import *
@@ -26,22 +27,21 @@ def calculate_rotation_matrix(angle_x, angle_y, angle_z):
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((1400, 700))
-    
-    scale = 4
-    offset = (WIDTH // 2, HEIGHT // 2)
-    rotation_angle = 0.05
+    screen = pygame.display.set_mode((width, height))
+    font = pygame.font.Font(None, 24)
     
     rotation_x = 0
     rotation_y = 0
     rotation_z = 0
-        
     vertices, triangles, edges = parse('Shelf.stl')
     flat_surfaces = detect_flat_surfaces(vertices, triangles)
     sketch_planes = detect_sketch_planes(flat_surfaces, vertices)
+    sketch_plane_edges = detect_sketch_plane_edges(sketch_planes, edges, vertices)
     extrudes = detect_extrudes(sketch_planes, vertices)
-    extrude_characterize(extrudes)
-
+    
+    num_features = max(len(sketch_planes), len(extrudes['extrudes']), 25)
+    colors = create_color_scheme(num_features)
+    
     running = True
     while running:
         for event in pygame.event.get():
@@ -59,15 +59,17 @@ def main():
             rotation_x += rotation_angle
 
         rotation_matrix = calculate_rotation_matrix(rotation_x, rotation_y, rotation_z)
-        screen.fill(BLACK)
-        
-        render_stl(screen, vertices, triangles, scale, offset, rotation_matrix)
-        render_sketch_planes(screen, vertices, sketch_planes, scale, offset, rotation_matrix, padding=2)
-        render_extrudes(screen, extrudes, vertices, scale, offset, rotation_matrix)
+        screen.fill((0, 0, 0))
+        render_feature_tree(screen, extrudes, colors)
+
+        render_stl(screen, vertices, triangles, scale, right_offset, rotation_matrix)
+        render_sketch_planes(screen, vertices, sketch_planes, scale, left_offset, rotation_matrix, colors)
+        render_sketch_contours(screen, vertices, sketch_plane_edges, scale, left_offset, rotation_matrix)
+        render_edges(screen, vertices, edges, scale, left_offset, rotation_matrix)
+        render_extrudes(screen, extrudes, vertices, scale, left_offset, rotation_matrix, colors)
 
         pygame.display.flip()
         pygame.time.Clock().tick(60)
-        
     pygame.quit()
 
 if __name__ == "__main__":

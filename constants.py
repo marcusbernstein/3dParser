@@ -1,12 +1,7 @@
-SCALE = 12
-WIDTH = 1400
-HEIGHT = 750
-ROTATION_SPEED = 2
-AXIS_LENGTH = 100
-CONVEX = 120
-TOL = 0.01 * SCALE
-FPS = 120
+scale = 3
+width = 1440
+height = 750
 
-WHITE = (255, 255, 255)
-BLACK = (0, 0, 0)
-PINK = (255, 105, 180)
+left_offset = (width // 4, height // 2)
+right_offset = ((width // 4) * 3, height // 2)
+rotation_angle = 0.05
