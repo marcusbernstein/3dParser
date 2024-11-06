@@ -1,176 +1,199 @@
 import numpy as np
 from rendering import *
 from collections import defaultdict
+from math import isclose
 
-def detect_flat_surfaces(vertices: np.ndarray, triangles: list, tolerance: float = 1e-3) -> dict:
-    # Sets to store unique planes along each axis
-    planes_x = set()
-    planes_y = set()
-    planes_z = set()
-
-    # Check all vertices and group them by rounded X, Y, or Z magnitudes
+def detect_sketch_planes(vertices: np.ndarray, triangles: list, tolerance: float = 1e-3) -> list:
+    # Step 1: Detect flat surfaces aligned with primary axes
+    planes = {'x': set(), 'y': set(), 'z': set()}
     for vertex in vertices:
         x, y, z = vertex
-        # Round the values to avoid floating-point imprecision when grouping
-        planes_x.add(round(x, 5))
-        planes_y.add(round(y, 5))
-        planes_z.add(round(z, 5))
+        planes['x'].add(round(x, 5))
+        planes['y'].add(round(y, 5))
+        planes['z'].add(round(z, 5))
 
-    # Helper function to filter planes based on the number of points in each plane
-    def filter_planes(axis_planes, axis_index):
-        flat_planes = []
+    def collect_surface_triangles(axis_planes, axis_index):
+        surfaces = {}
         for plane in axis_planes:
-            # Collect points that are within the tolerance of this plane
-            points_in_plane = [vertex for vertex in vertices if abs(vertex[axis_index] - plane) < tolerance]
-            
-            # Only consider planes with more than 3 points
+            points_in_plane = [i for i, v in enumerate(vertices) if abs(v[axis_index] - plane) < tolerance]
             if len(points_in_plane) > 3:
-                flat_planes.append(plane)
-        return flat_planes
+                # Find edges for this plane
+                plane_edges = set()
+                for tri in triangles:
+                    v1, v2, v3, _ = tri
+                    if v1 in points_in_plane and v2 in points_in_plane and v3 in points_in_plane:
+                        edges = {(min(v1, v2), max(v1, v2)),
+                                (min(v2, v3), max(v2, v3)),
+                                (min(v3, v1), max(v3, v1))}
+                        plane_edges.update(edges)
+                if plane_edges:  # Only add if there are valid edges
+                    surfaces[plane] = (set(points_in_plane), plane_edges)
+        return surfaces
 
-    # Detect flat surfaces on X, Y, Z axes
-    flat_surfaces = {
-        'x': filter_planes(planes_x, axis_index=0),
-        'y': filter_planes(planes_y, axis_index=1),
-        'z': filter_planes(planes_z, axis_index=2)
+    # Axis to normal vector mapping
+    axis_to_normal = {
+        'x': (1, 0, 0),
+        'y': (0, 1, 0),
+        'z': (0, 0, 1)
     }
-    return flat_surfaces
 
-def detect_sketch_planes(flat_surfaces: dict, vertices: np.ndarray, tolerance=1e-3) -> list:
-    # First, group parallel surfaces together by their axis and position
-    parallel_groups = {}
-    for axis, planes in flat_surfaces.items():
-        for plane in planes:
-            # Round plane position to handle floating point comparison
-            plane_key = (axis, round(plane/tolerance)*tolerance)
-            if plane_key not in parallel_groups:
-                parallel_groups[plane_key] = []
-            
-            # Find vertices on this plane
-            if axis == 'x':
-                plane_vertices = [i for i, v in enumerate(vertices) if abs(v[0] - plane) < tolerance]
-            elif axis == 'y':
-                plane_vertices = [i for i, v in enumerate(vertices) if abs(v[1] - plane) < tolerance]
-            else:  # z
-                plane_vertices = [i for i, v in enumerate(vertices) if abs(v[2] - plane) < tolerance]
-                
-            if len(plane_vertices) > 3:
-                parallel_groups[plane_key].append((plane, set(plane_vertices)))
+    # Store flat surfaces on each axis with vertex coverage information
+    flat_surfaces = {
+        'x': collect_surface_triangles(planes['x'], axis_index=0),
+        'y': collect_surface_triangles(planes['y'], axis_index=1),
+        'z': collect_surface_triangles(planes['z'], axis_index=2)
+    }
 
-    # Convert parallel groups to candidate sketch planes
+    # Step 2: Convert surfaces to unified format with coverage information
     candidate_planes = []
-    for (axis, pos), surfaces in parallel_groups.items():
-        if surfaces:  # If we found any valid surfaces on this plane
-            # Combine all vertices from parallel surfaces
-            all_vertices = set().union(*(verts for _, verts in surfaces))
-            if len(all_vertices) > 3:
-                candidate_planes.append((axis, pos, list(all_vertices)))
-    
-    # Sort planes first by distance from origin, then by number of vertices for planes with same magnitude
-    def sort_key(plane):
-        axis, pos, vertices = plane
-        # Primary sort: absolute distance from origin (smaller is better)
-        distance_from_origin = abs(pos)
-        # Secondary sort: number of vertices (more is better, use negative for reverse sort)
-        vertex_count = -len(vertices)  # Negative because we want higher vertex counts first
-        return (distance_from_origin, vertex_count)
-    
-    # Sort using the new criteria
-    candidate_planes.sort(key=sort_key)
-    
-    # Greedily select sketch planes
+    for axis, surfaces in flat_surfaces.items():
+        for magnitude, (verts, edges) in surfaces.items():
+            candidate_planes.append({
+                'normal': axis_to_normal[axis],
+                'magnitude': magnitude,
+                'vertices': verts,
+                'edges': edges
+            })
+    # Step 3: Use greedy set cover to select minimal set of planes
+    all_vertices = set(range(len(vertices)))
+    selected_planes = []
     covered_vertices = set()
-    sketch_planes = []
     
-    for plane in candidate_planes:
-        axis, pos, plane_vertices = plane
-        # Check how many new vertices this plane would cover
-        new_vertices = set(plane_vertices) - covered_vertices
-        if len(new_vertices) > 3:  # Only select if it covers enough new vertices
-            sketch_planes.append(plane)
-            covered_vertices.update(new_vertices)
+    while covered_vertices != all_vertices and candidate_planes:
+        # Find plane that covers most uncovered vertices
+        best_plane = max(candidate_planes, 
+                        key=lambda p: len(p['vertices'] - covered_vertices))
+        
+        # If best plane adds no new coverage, check for off-angle planes
+        if not (best_plane['vertices'] - covered_vertices):
+            break
             
-            # Optional: If all vertices are covered, we can stop
-            if len(covered_vertices) == len(vertices):
+        # Add selected plane
+        plane_index = len(selected_planes)
+        selected_planes.append((
+            plane_index,
+            best_plane['normal'],
+            best_plane['magnitude'],
+            best_plane['edges']
+        ))
+        covered_vertices.update(best_plane['vertices'])
+        
+        # Remove selected plane from candidates
+        candidate_planes.remove(best_plane)
+
+    # Step 4: Handle remaining vertices with off-angle planes if needed
+    if covered_vertices != all_vertices:
+        leftover_vertices = all_vertices - covered_vertices
+        normal_groups = {}
+        
+        for tri_idx, (v1, v2, v3, normal) in enumerate(triangles):
+            if {v1, v2, v3} & leftover_vertices:
+                normal_key = tuple(round(n, 5) for n in normal)
+                if normal_key not in normal_groups:
+                    normal_groups[normal_key] = (set(), set())
+                normal_groups[normal_key][0].update({v1, v2, v3})
+                edges = {(min(v1, v2), max(v1, v2)),
+                        (min(v2, v3), max(v2, v3)),
+                        (min(v3, v1), max(v3, v1))}
+                normal_groups[normal_key][1].update(edges)
+
+        # Add off-angle planes that provide the most additional coverage
+        for normal, (verts, edges) in sorted(normal_groups.items(), 
+                                           key=lambda x: len(x[1][0] - covered_vertices),
+                                           reverse=True):
+            if not (verts - covered_vertices):
+                continue
+                
+            # Calculate magnitude as distance from origin to plane
+            magnitude = sum(n * vertices[list(verts)[0]][i] for i, n in enumerate(normal))
+            selected_planes.append((
+                len(selected_planes),
+                normal,
+                magnitude,
+                edges
+            ))
+            covered_vertices.update(verts)
+            
+            if covered_vertices == all_vertices:
                 break
-    
-    return sketch_planes
 
-def detect_sketch_plane_edges(sketch_planes: list, edges: list, vertices: np.ndarray, tolerance=1e-3) -> list:
-    sketch_plane_edges = []
+    return selected_planes
 
-    for plane in sketch_planes:
-        axis, plane_magnitude, plane_vertices = plane
-        plane_edges = []
-
-        # Iterate over all edges and check if both vertices of the edge lie on the sketch plane
-        for edge in edges:
-            v1, v2 = edge
-            vertex1 = vertices[v1]
-            vertex2 = vertices[v2]
-
-            # Check if both vertices of the edge lie on the same sketch plane within the tolerance
-            if axis == 'x':
-                if abs(vertex1[0] - plane_magnitude) < tolerance and abs(vertex2[0] - plane_magnitude) < tolerance:
-                    plane_edges.append(edge)
-            elif axis == 'y':
-                if abs(vertex1[1] - plane_magnitude) < tolerance and abs(vertex2[1] - plane_magnitude) < tolerance:
-                    plane_edges.append(edge)
-            elif axis == 'z':
-                if abs(vertex1[2] - plane_magnitude) < tolerance and abs(vertex2[2] - plane_magnitude) < tolerance:
-                    plane_edges.append(edge)
-
-        # Store the edges that belong to this sketch plane
-        sketch_plane_edges.append((axis, plane_magnitude, plane_edges))
-
-    return sketch_plane_edges
-
-def detect_extrudes(sketch_planes: list, vertices: np.ndarray, tolerance: float = 1e-5) -> dict:
-    # Sort sketch planes by axis, then by magnitude
-    sorted_planes = sorted(sketch_planes, key=lambda x: (x[0], x[1]))
-    
-    extrudes = []
-    # Group vertices by their rounded x,y coordinates for each plane
+def detect_extrudes(sketch_planes: list, vertices: np.ndarray, tolerance: float = 1e-3, angle_tolerance: float = 0.005) -> dict:
+    # Sort planes by index for consistent processing
+    sorted_planes = sorted(sketch_planes, key=lambda x: x[0])  # x[0] is now the index
     plane_vertex_groups = []
-    for axis, magnitude, plane_vertex_indices in sorted_planes:
+    
+    for plane in sorted_planes:
+        index, normal_vector, magnitude, edges = plane
+        # Extract vertices from edges
+        plane_vertex_indices = set()
+        for edge in edges:
+            plane_vertex_indices.update(edge)
+            
+        # Group vertices based on their projected position
         vertex_groups = defaultdict(list)
         for idx in plane_vertex_indices:
-            v = vertices[idx]
-            # Round the coordinates to ensure consistent matching, avoid floating-point issues
-            key = (round(v[0], 5), round(v[1], 5))  # Using 5 decimals for more precision
+            v = vertices[idx]  # Get actual vertex coordinates
+            
+            # Project vertices based on normal vector
+            if np.allclose(normal_vector, (1, 0, 0)):  # X-axis
+                key = (round(v[1], 5), round(v[2], 5))
+            elif np.allclose(normal_vector, (0, 1, 0)):  # Y-axis
+                key = (round(v[0], 5), round(v[2], 5))
+            elif np.allclose(normal_vector, (0, 0, 1)):  # Z-axis
+                key = (round(v[0], 5), round(v[1], 5))
+            else:  # Off-angle plane
+                # Project point onto plane's normal direction
+                key = (round(np.dot(normal_vector, v), 5))
+                
             vertex_groups[key].append(idx)
-        plane_vertex_groups.append((axis, magnitude, vertex_groups))
+            
+        plane_vertex_groups.append((normal_vector, magnitude, vertex_groups))
 
-    for i, (axis1, magnitude1, vertices1) in enumerate(plane_vertex_groups):
-        for j in range(i+1, len(plane_vertex_groups)):
-            axis2, magnitude2, vertices2 = plane_vertex_groups[j]
-            magnitude1 = round(magnitude1, 3)
-            magnitude2 = round(magnitude2, 3)
-            if axis1 != axis2:
-                continue  # Only consider planes on the same axis
-            # Find matching vertex pairs based on rounded x, y coordinates
+    # Detect parallel extrudes
+    extrudes = []
+    for i, (normal1, magnitude1, vertices1) in enumerate(plane_vertex_groups):
+        for j in range(i + 1, len(plane_vertex_groups)):
+            normal2, magnitude2, vertices2 = plane_vertex_groups[j]
+            
+            # Check if planes are parallel
+            cos_angle = np.dot(normal1, normal2) / (np.linalg.norm(normal1) * np.linalg.norm(normal2))
+            if not isclose(abs(cos_angle), 1, abs_tol=angle_tolerance):
+                continue
+                
+            # Calculate distance between planes
+            distance = round((magnitude2 - magnitude1), 5)
+            
+            # Find matching vertex pairs
             matching_pairs = []
-            for key in set(vertices1.keys()) & set(vertices2.keys()):
+            common_keys = set(vertices1.keys()) & set(vertices2.keys())
+            for key in common_keys:
                 for idx1 in vertices1[key]:
                     for idx2 in vertices2[key]:
                         matching_pairs.append((idx1, idx2))
-
-            if len(matching_pairs) >= 3:
-                # Potential extrude found
-                direction = 1 if magnitude2 > magnitude1 else -1
-                # Round the distance to 5 decimal places to ensure precision
-                distance = round(abs(magnitude2 - magnitude1), 5)
-
+                        
+            # If enough matching pairs found, record the extrude
+            if len(matching_pairs) > 3:
+                direction = 1 if normal2 == normal1 else -1
+                
+                # Determine if this is an axis-aligned or off-angle extrude
+                if np.allclose(normal1, (1, 0, 0)):
+                    axis = 'x'
+                elif np.allclose(normal1, (0, 1, 0)):
+                    axis = 'y'
+                elif np.allclose(normal1, (0, 0, 1)):
+                    axis = 'z'
+                else:
+                    axis = 'normal'
                 extrude_info = {
-                    'start_plane': (axis1, magnitude1),
-                    'end_plane': (axis2, magnitude2),
+                    'start_plane': (normal1, magnitude1),
+                    'end_plane': (normal2, magnitude2),
+                    'distance': distance,
                     'direction': direction,
-                    'distance': distance,  # Store the rounded distance
-                    'matching_vertices': matching_pairs,
-                    'vertex_count': len(matching_pairs)
+                    'matching_pairs': matching_pairs
                 }
                 extrudes.append(extrude_info)
-
     def group_extrudes_by_sketch(extrudes):
         """Group extrudes by their start planes to identify features created from the same sketch"""
         sketch_groups = {}
@@ -178,7 +201,7 @@ def detect_extrudes(sketch_planes: list, vertices: np.ndarray, tolerance: float 
         
         # First pass: group extrudes by their start planes
         for i, extrude in enumerate(extrudes):
-            start_plane = (extrude['start_plane'][0], round(extrude['start_plane'][1], 3))
+            start_plane = (extrude['start_plane'][0], round(extrude['start_plane'][1], 1))
             
             # If this start plane hasn't been seen, assign it a new sketch index
             if start_plane not in sketch_groups:
@@ -191,164 +214,330 @@ def detect_extrudes(sketch_planes: list, vertices: np.ndarray, tolerance: float 
             sketch_groups[start_plane]['extrudes'].append(i)
         
         return sketch_groups
-
-    # Add sketch grouping information to the return value
     return {
         'extrudes': extrudes,
         'sketch_groups': group_extrudes_by_sketch(extrudes)
     }
 
-def build_sketches(sketch_planes, sketch_plane_edges, extrude_data, vertices):
+def build_sketches(sketch_planes, vertices, triangles):
     sketches = []
-    used_edges = set()  # Keep track of edges we've already assigned to earlier sketches
+    used_edges = set()
+    triangle_normals = defaultdict(set)
     
-    # Create a mapping of plane locations to their sketch indices
-    start_planes = {(plane[0], round(plane[1], 3)): info['sketch_index'] 
-                   for plane, info in extrude_data['sketch_groups'].items()}
-    
-    # Sort sketch planes by sketch index to ensure we process them in order
-    sorted_planes = []
+    def normalize_vector(vector):
+        normalized = np.array(vector)
+        flipped = False
+        if np.linalg.norm(normalized) != 0:
+            normalized = normalized / np.linalg.norm(normalized)
+            if normalized[0] < 0 or (normalized[0] == 0 and normalized[1] < 0) or \
+               (normalized[0] == 0 and normalized[1] == 0 and normalized[2] < 0):
+                normalized = -normalized
+                flipped = True
+        return tuple(round(float(c), 3) for c in normalized), flipped
+
+    def create_2d_local_sketch(edges, vertices, transformation_matrix):
+        local_edges = []
+        for edge in edges:
+            v1, v2 = edge
+            vertex1, vertex2 = vertices[v1], vertices[v2]
+            local_v1 = np.dot(transformation_matrix, np.array([*vertex1, 1]))[:2]
+            local_v2 = np.dot(transformation_matrix, np.array([*vertex2, 1]))[:2]
+            local_edges.append((tuple(local_v1), tuple(local_v2)))
+        return local_edges
+
+    def build_transformation_matrix(normalized_normal):
+        z_axis = np.array(normalized_normal)
+        x_axis = np.cross(z_axis, [0, 1, 0])
+        if np.allclose(x_axis, 0):
+            x_axis = np.cross(z_axis, [1, 0, 0])
+        x_axis /= np.linalg.norm(x_axis)
+        y_axis = np.cross(z_axis, x_axis)
+        transformation_matrix = np.array([
+            [*x_axis, 0],
+            [*y_axis, 0],
+            [*z_axis, 0],
+            [0, 0, 0, 1]
+        ])
+        return np.linalg.inv(transformation_matrix)
+
+    # Store triangle normals for edge filtering
+    for v1, v2, v3, normal in triangles:
+        normalized_normal, _ = normalize_vector(normal)
+        edges = [(v1, v2), (v2, v3), (v3, v1)]
+        for edge in edges:
+            edge_key = tuple(sorted(edge))
+            triangle_normals[edge_key].add(normalized_normal)
+
+    # Create unsorted sketches list
+    unsorted_sketches = []
     for plane in sketch_planes:
-        axis, plane_magnitude, plane_vertices = plane
-        plane_key = (axis, round(plane_magnitude, 3))
-        if plane_key in start_planes:
-            sorted_planes.append((start_planes[plane_key], plane))
-    
-    sorted_planes.sort(key=lambda x: x[0])  # Sort by sketch index
-    
-    for sketch_index, plane in sorted_planes:
-        axis, plane_magnitude, plane_vertices = plane
-        plane_key = (axis, round(plane_magnitude, 3))
-        sketch_edges = set()  # Edges for this specific sketch
-        
-        # First, collect all candidate edges that are directly on this plane
-        candidate_edges = set()
-        for edge_plane in sketch_plane_edges:
-            edge_axis, edge_magnitude, edges = edge_plane
-            if (edge_axis == axis and 
-                abs(round(edge_magnitude, 3) - round(plane_magnitude, 3)) < 1e-3):
-                for edge in edges:
-                    candidate_edges.add(tuple(sorted(edge)))  # Sort vertices to ensure consistent ordering
-        
-        # Find all extrudes that start from this plane
-        for extrude in extrude_data['extrudes']:
-            start_plane = extrude['start_plane']
-            end_plane = extrude['end_plane']
+        if len(plane[3]) < 3:
+            continue
             
-            # If this extrude starts from our current plane
-            if (start_plane[0] == axis and 
-                abs(round(start_plane[1], 3) - round(plane_magnitude, 3)) < 1e-3):
-                
-                # Add edges from both start and end planes
-                for edge_plane in sketch_plane_edges:
-                    edge_axis, edge_magnitude, edges = edge_plane
-                    
-                    # Check both start and end planes
-                    if ((edge_axis == start_plane[0] and 
-                         abs(round(edge_magnitude, 3) - round(start_plane[1], 3)) < 1e-3) or
-                        (edge_axis == end_plane[0] and 
-                         abs(round(edge_magnitude, 3) - round(end_plane[1], 3)) < 1e-3)):
-                        for edge in edges:
-                            candidate_edges.add(tuple(sorted(edge)))
-        
-        # Filter out edges that have already been used in earlier sketches
-        new_edges = candidate_edges - used_edges
-        
-        # If we found any new edges, create a sketch
-        if new_edges:
-            # Convert vertex indices to 2D coordinates based on the plane's axis
-            edges_2d = []
-            for edge in new_edges:
+        index, normal, magnitude, plane_edges = plane
+        normalized_normal, flipped = normalize_vector(normal)
+        adjusted_magnitude = magnitude
+        if flipped:
+            adjusted_magnitude *= -1
+
+        transformation_matrix = build_transformation_matrix(normalized_normal)
+
+        # Collect unique edges associated with the sketch plane
+        unique_edges = set()
+        for edge in plane_edges:
+            edge_key = tuple(sorted(edge))
+            if len(triangle_normals[edge_key]) > 1:
+                unique_edges.add(edge)
+
+        formatted_edges = []
+        for edge in unique_edges:
+            if edge not in used_edges:
                 v1, v2 = edge
-                vertex1 = vertices[v1]
-                vertex2 = vertices[v2]
-                
-                # Project vertices to 2D based on the plane's axis
-                if axis == 'x':
-                    point1 = (vertex1[1], vertex1[2])
-                    point2 = (vertex2[1], vertex2[2])
-                elif axis == 'y':
-                    point1 = (vertex1[0], vertex1[2])
-                    point2 = (vertex2[0], vertex2[2])
-                else:  # z
-                    point1 = (vertex1[0], vertex1[1])
-                    point2 = (vertex2[0], vertex2[1])
-                
-                edges_2d.append((point1, point2))
-            
-            if edges_2d:  # Only create a sketch if we have edges to show
-                sketches.append({
-                    'index': sketch_index,
-                    'axis': axis,
-                    'magnitude': plane_magnitude,
-                    'edges': edges_2d
-                })
-                
-                # Add these edges to our used set
-                used_edges.update(new_edges)
+                vertex1, vertex2 = vertices[v1], vertices[v2]
+                formatted_edges.append(((round(vertex1[0], 3), round(vertex1[1], 3)),
+                                      (round(vertex2[0], 3), round(vertex2[1], 3))))
+                used_edges.add(edge)
+
+        sketch_vertices = [
+            np.dot(transformation_matrix, np.array([*v, 1]))[:2]
+            for v in vertices if np.isclose(np.dot(v, normalized_normal), adjusted_magnitude, atol=1e-5)
+        ]
+
+        if formatted_edges:
+            sketch = {
+                'normal': normalized_normal,
+                'magnitude': adjusted_magnitude,
+                'edges': create_2d_local_sketch(unique_edges, vertices, transformation_matrix),
+                'vertices': [(round(v[0], 3), round(v[1], 3)) for v in sketch_vertices],
+                'transformation_matrix': transformation_matrix,
+                'global_edges': formatted_edges,
+                'abs_magnitude': abs(adjusted_magnitude)
+            }
+            unsorted_sketches.append(sketch)
+
+    # Sort sketches by absolute magnitude
+    sorted_sketches = sorted(unsorted_sketches, key=lambda x: x['abs_magnitude'])
     
-    return sorted(sketches, key=lambda x: x['index'])
+    # Assign indices after sorting
+    sketches = []
+    for i, sketch in enumerate(sorted_sketches):
+        sketch['index'] = i
+        sketches.append(sketch)
+
+    return sketches
 
 def build_extrudes(raw_extrude_data, sketches, vertices, tolerance=1e-3):
-    # Initialize storage for filtered extrudes
     filtered_extrudes = []
     sketch_groups = {}
     
-    # Create a mapping of sketch planes to their indices
-    sketch_planes = {(sketch['axis'], round(sketch['magnitude'], 3)): sketch['index'] 
-                    for sketch in sketches}
+    print(f"Number of raw extrudes: {len(raw_extrude_data['extrudes'])}")
+    print(f"Number of sketches: {len(sketches)}")
     
-    # Track vertices that have been accounted for
-    covered_vertices = set()
+    # Create a mapping of sketch planes to their indices with consistent rounding
+    sketch_planes = {}
+    for sketch in sketches:
+        normal = tuple(round(n, 1) for n in sketch['normal'])
+        magnitude = round(sketch['magnitude'], 1)
+        key = (normal, magnitude)
+        sketch_planes[key] = sketch['index']
+        print(f"Stored sketch key: {key} -> index {sketch['index']}")
     
-    # First pass: Group extrudes by their start planes and filter overlapping ones
+    print("\nProcessing extrudes:")
     potential_extrudes = {}
-    for i, extrude in enumerate(raw_extrude_data['extrudes']):
-        start_plane = (extrude['start_plane'][0], round(extrude['start_plane'][1], 3))
-        if start_plane in sketch_planes:
-            sketch_index = sketch_planes[start_plane]
-            if sketch_index not in potential_extrudes:
-                potential_extrudes[sketch_index] = []
-            potential_extrudes[sketch_index].append((i, extrude))
     
-    # Second pass: Select the most significant extrudes for each sketch
-    for sketch_index in sorted(potential_extrudes.keys()):
-        extrudes_for_sketch = potential_extrudes[sketch_index]
+    # Sort sketches by magnitude for proper matching
+    sorted_sketches = sorted(sketch_planes.items(), key=lambda x: abs(x[0][1]))
+    
+    # Track which sketches are used as end planes
+    end_plane_sketches = set()
+    
+    for i, extrude in enumerate(raw_extrude_data['extrudes']):
+        # Get the original normal directions and magnitudes
+        print("reid")
+        print(extrude['direction'])
+        normal1 = tuple(round(n, 1) for n in extrude['start_plane'][0])
+        magnitude1 = round(extrude['start_plane'][1], 1)
+        normal2 = tuple(round(n * extrude['direction'], 1) for n in extrude['end_plane'][0])
+        magnitude2 = round(extrude['end_plane'][1], 1) * extrude['direction']
+        print(f"\nProcessing extrude {i}:")
+        print(f"Plane 1: {normal1}, {magnitude1}")
+        print(f"Plane 2: {normal2}, {magnitude2},")
         
-        # Sort extrudes by number of matching vertices (most significant first)
-        extrudes_for_sketch.sort(key=lambda x: len(x[1]['matching_vertices']), reverse=True)
+        # Find matching sketch indices for both planes
+        sketch_index1 = None
+        sketch_index2 = None
         
-        valid_extrudes = []
-        sketch_vertices = set()
+        for (sketch_normal, sketch_magnitude), sketch_index in sorted_sketches:
+            # Check both planes
+            if (np.allclose(normal1, sketch_normal, atol=0.1) and 
+                abs(abs(magnitude1) - abs(sketch_magnitude)) < tolerance):
+                sketch_index1 = sketch_index
+            
+            if (np.allclose(normal2, sketch_normal, atol=0.1) and 
+                abs(abs(magnitude2) - abs(sketch_magnitude)) < tolerance):
+                sketch_index2 = sketch_index
+        
+        if sketch_index1 is not None and sketch_index2 is not None:
+            # Determine which sketch should be the start based on magnitude
+            sketch1_mag = sketches[sketch_index1]['magnitude']
+            sketch2_mag = sketches[sketch_index2]['magnitude']
+            
+            # If sketch2 is already used as an end plane, make sketch1 the end plane
+            if sketch_index2 in end_plane_sketches:
+                start_sketch_index = sketch_index2
+                end_sketch_index = sketch_index1
+                start_magnitude = sketch2_mag
+                end_magnitude = sketch1_mag
+            # If sketch1 is already used as an end plane, make sketch2 the end plane
+            elif sketch_index1 in end_plane_sketches:
+                start_sketch_index = sketch_index1
+                end_sketch_index = sketch_index2
+                start_magnitude = sketch1_mag
+                end_magnitude = sketch2_mag
+            # Otherwise, use magnitude to determine order
+            else:
+                if sketch1_mag < sketch2_mag:
+                    start_sketch_index = sketch_index1
+                    end_sketch_index = sketch_index2
+                    start_magnitude = sketch1_mag
+                    end_magnitude = sketch2_mag
+                else:
+                    start_sketch_index = sketch_index2
+                    end_sketch_index = sketch_index1
+                    start_magnitude = sketch2_mag
+                    end_magnitude = sketch1_mag
+            
+            # Track this sketch as being used as an end plane
+            end_plane_sketches.add(end_sketch_index)
+            
+            if start_sketch_index not in potential_extrudes:
+                potential_extrudes[start_sketch_index] = []
+            
+            extrude_info = extrude.copy()
+            extrude_info['start_sketch_index'] = start_sketch_index
+            extrude_info['end_sketch_index'] = end_sketch_index
+            extrude_info['start_magnitude'] = start_magnitude
+            extrude_info['end_magnitude'] = end_magnitude
+            potential_extrudes[start_sketch_index].append((i, extrude_info))
+            print(f"Matched: Start sketch {start_sketch_index} -> End sketch {end_sketch_index}")
+    
+    # Process matched extrudes
+    for start_sketch_index in sorted(potential_extrudes.keys()):
+        extrudes_for_sketch = potential_extrudes[start_sketch_index]
         
         for i, extrude in extrudes_for_sketch:
             # Get vertices involved in this extrude
             extrude_vertices = set()
-            for v1, v2 in extrude['matching_vertices']:
+            for v1, v2 in extrude['matching_pairs']:
                 extrude_vertices.add(v1)
                 extrude_vertices.add(v2)
             
-            # Check if this extrude contributes enough new vertices
-            new_vertices = extrude_vertices - sketch_vertices
-            if len(new_vertices) >= 3:  # Require at least 3 new vertices for a meaningful feature
-                # Add to valid extrudes
-                valid_extrudes.append(i)
+            if len(extrude_vertices) > 3:
                 filtered_extrudes.append(extrude)
-                sketch_vertices.update(extrude_vertices)
-                covered_vertices.update(extrude_vertices)
                 
                 # Update sketch groups
-                if sketch_index not in sketch_groups:
-                    sketch_groups[sketch_index] = []
-                sketch_groups[sketch_index].append(len(filtered_extrudes) - 1)
+                start_normal = tuple(round(n, 1) for n in sketches[extrude['start_sketch_index']]['normal'])
+                start_magnitude = round(sketches[extrude['start_sketch_index']]['magnitude'], 1)
+                plane_key = (start_normal, start_magnitude)
+                
+                if plane_key not in sketch_groups:
+                    sketch_groups[plane_key] = {
+                        'sketch_index': start_sketch_index,
+                        'extrudes': []
+                    }
+                sketch_groups[plane_key]['extrudes'].append(len(filtered_extrudes) - 1)
     
     return {
         'extrudes': filtered_extrudes,
-        'sketch_groups': {
-            (sketches[idx]['axis'], round(sketches[idx]['magnitude'], 3)): {
-                'sketch_index': idx,
-                'extrudes': extrudes
-            }
-            for idx, extrudes in sketch_groups.items()
-        }
+        'sketch_groups': sketch_groups
     }
+
+def build_feature_tree(sketches, extrude_data):
+    print("\n=== Build Feature Tree Debugging ===")
+    print(f"Number of sketches: {len(sketches)}")
+    print(f"Number of extrudes: {len(extrude_data['extrudes'])}")
+    print(f"Number of sketch groups: {len(extrude_data['sketch_groups'])}")
+
+    # Initialize sketch-to-extrude mapping
+    sketch_to_extrudes = defaultdict(list)
+    sketch_usage = defaultdict(int)
+
+    # Process each extrude and map it to its start sketch
+    for i, extrude in enumerate(extrude_data['extrudes']):
+        start_sketch_index = extrude.get('start_sketch_index')
+        end_sketch_index = extrude.get('end_sketch_index')
+        direction = extrude.get('direction')
+        
+        if start_sketch_index is not None and end_sketch_index is not None:
+            # Get the actual magnitudes from the sketches
+            start_magnitude = sketches[start_sketch_index]['magnitude'] * direction
+            end_magnitude = sketches[end_sketch_index]['magnitude']
+            
+            # Ensure the direction is maintained based on logical building order
+            # Normal case - building upward
+            extrude_info = {
+                'index': i,
+                'start_magnitude': start_magnitude,
+                'end_magnitude': end_magnitude,
+                'distance': abs(end_magnitude - start_magnitude),
+                'direction': direction,
+                'end_sketch_index': end_sketch_index
+            }
+            sketch_to_extrudes[start_sketch_index].append(extrude_info)
+            sketch_usage[start_sketch_index] += 1
+            sketch_usage[end_sketch_index] += 1
+
+    # Build feature tree
+    feature_tree = []
+    processed_sketches = set()
+
+    # Process sketches in order of magnitude
+    sorted_sketches = sorted(sketches, key=lambda s: abs(s['magnitude']))
+    
+    for sketch in sorted_sketches:
+        sketch_index = sketch['index']
+        
+        # Skip if this sketch is only used as an end plane
+        if sketch_usage[sketch_index] == 0:
+            continue
+            
+        normal = sketch['normal']
+        magnitude = round(float(sketch['magnitude']), 3)
+
+        # Determine normal representation
+        if isinstance(normal, (tuple, list, np.ndarray)):
+            if np.allclose(normal, (1, 0, 0), atol=0.1):
+                normal_repr = 'X'
+            elif np.allclose(normal, (0, 1, 0), atol=0.1):
+                normal_repr = 'Y'
+            elif np.allclose(normal, (0, 0, 1), atol=0.1):
+                normal_repr = 'Z'
+            else:
+                normal_repr = str(tuple(round(n, 3) for n in normal))
+        else:
+            normal_repr = normal
+
+        # Get extrudes that start from this sketch
+        sketch_extrudes = sketch_to_extrudes[sketch_index]
+        
+        # Sort extrudes by end magnitude
+        sketch_extrudes.sort(key=lambda e: abs(e['end_magnitude']))
+
+        feature_tree_item = {
+            'index': len(feature_tree),  # Assign new sequential index
+            'sketch_index': sketch_index,  # Keep original sketch index for reference
+            'normal': normal_repr,
+            'magnitude': magnitude * direction,
+            'extrudes': sketch_extrudes
+        }
+        feature_tree.append(feature_tree_item)
+        processed_sketches.add(sketch_index)
+
+    # Debug output
+    print("\nFeature Tree Structure:")
+    for feature in feature_tree:
+        print(f"\nSketch {feature['sketch_index']} @ {feature['magnitude']}")
+        for extrude in feature['extrudes']:
+            print(f"  Extrude {extrude['index']} {extrude['start_magnitude']} -> {extrude['end_magnitude']}")
+
+    return feature_tree
