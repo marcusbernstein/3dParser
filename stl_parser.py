@@ -1,7 +1,7 @@
 from typing import List, Tuple
 from collections import defaultdict
 
-def parse(file_path: str, decimal_places: int = 3) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, int, int]], List[Tuple[int, int]]]:
+def parse(file_path: str, decimal_places: int = 1) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, int, int, Tuple[float, float, float]]], List[Tuple[int, int]]]:
     unique_vertices = {}
     vertex_list = []
     triangles = []
@@ -42,7 +42,8 @@ def parse(file_path: str, decimal_places: int = 3) -> Tuple[List[Tuple[float, fl
                 
             elif stripped_line.startswith("endloop"):
                 if len(current_triangle) == 3:
-                    triangles.append(tuple(current_triangle))
+                    # Add triangle with associated normal
+                    triangles.append((current_triangle[0], current_triangle[1], current_triangle[2], current_normal))
                     
                     # Add edges with their associated normal
                     for i in range(3):

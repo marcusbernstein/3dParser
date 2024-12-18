@@ -6,6 +6,7 @@ from detection import *
 from constants import *
 from stl_parser import *
 from rendering import *
+from builder import *
 
 def rotate(vertex: tuple, axis: str, angle: float) -> tuple:
     x, y, z = vertex
@@ -24,7 +25,7 @@ def calculate_rotation_matrix(angle_x, angle_y, angle_z):
 def main():
     pygame.init()
     screen = pygame.display.set_mode((width, height))
-    vertices, triangles, edges = parse('testersquare.stl')
+    vertices, triangles, edges = parse('Tester.stl')
     
     rotation_x = 0
     rotation_y = 0
@@ -38,6 +39,10 @@ def main():
     sketches = build_sketches(sketch_planes, vertices, triangles)
     extrudes = build_extrudes(extrudes, sketches, vertices)
     feature_tree = build_feature_tree(sketches, extrudes)
+    
+    # Generate STEP file directly from sketches and extrudes
+    #generate_step_file(sketches, extrudes, output_file="output.step")
+    #print("STEP file 'output.step' generated successfully!")
     
     # Create color scheme
     num_features = max(len(sketch_planes), len(extrudes['extrudes']), 40)

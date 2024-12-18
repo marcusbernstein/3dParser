@@ -44,7 +44,7 @@ def render_sketch_planes(screen, vertices, sketches, scale, offset, rotation_mat
         
         # Create an orthonormal basis for the sketch plane
         z_axis = normal / np.linalg.norm(normal)
-        x_axis = np.array([1, 0, 0]) if abs(normal[1]) > 0.9 else np.array([0, 1, 0])
+        x_axis = np.array([0, -1, 0]) #if abs(normal[1]) > 0.9 else np.array([0, 1, 0])
         y_axis = np.cross(z_axis, x_axis)
         y_axis = y_axis / np.linalg.norm(y_axis)
         x_axis = np.cross(y_axis, z_axis)
@@ -68,10 +68,10 @@ def render_sketch_planes(screen, vertices, sketches, scale, offset, rotation_mat
         
         # Generate corners of the sketch plane in local coordinates
         corners_local = [
-            np.array([min_bounds[0], min_bounds[1], 0]),  # Bottom left
-            np.array([max_bounds[0], min_bounds[1], 0]),  # Bottom right
-            np.array([max_bounds[0], max_bounds[1], 0]),  # Top right
-            np.array([min_bounds[0], max_bounds[1], 0]),  # Top left
+            np.array([max_bounds[1], max_bounds[0], 0]),  # Bottom left
+            np.array([min_bounds[1], max_bounds[0], 0]),  # Bottom right
+            np.array([min_bounds[1], min_bounds[0], 0]),  # Top right
+            np.array([max_bounds[1], min_bounds[0], 0]),  # Top left
         ]
         
         # Calculate center point in local coordinates
@@ -157,29 +157,26 @@ def render_extrudes(screen, extrude_data, vertices, scale, offset, rotation_matr
             pygame.draw.circle(screen, sketch_color, projected_end, 4)
 
 def render_feature_tree(screen, feature_tree, colors, start_x=20, start_y=20):
-    try:
-        pygame.font.init()
-        font = pygame.font.SysFont(None, 24)
-    except:
-        print("Warning: Font initialization failed")
-        return
-
     current_y = start_y
     line_height = 30
+    font = pygame.font.SysFont(None, 24)
 
-    for feature in feature_tree:
-        color = colors[feature['index']]
-        # Render sketch header
-        sketch_text = f"sk{feature['index'] + 1} @{feature['normal']} = {feature['magnitude']:.3f}"
-        text_surface = font.render(sketch_text, True, color)
+
+    for feature_index, feature in enumerate(feature_tree):
+        color = colors[feature_index % len(colors)]
+        
+        # Render feature header
+        sketch = feature['sketch']
+        normal_str = sketch['normal'] if isinstance(sketch['normal'], str) else f"({sketch['normal'][0]:.2f}, {sketch['normal'][1]:.2f}, {sketch['normal'][2]:.2f})"
+        feature_text = f"{feature['type']} sk{sketch['index'] + 1} @{normal_str} = {sketch['magnitude']:.3f}"
+        text_surface = font.render(feature_text, True, color)
         screen.blit(text_surface, (start_x, current_y))
         current_y += line_height
         
         # Render associated extrudes
-        for extrude in feature['extrudes']:
-            direction = "+" if extrude['direction'] > 0 else "-"
-            extrude_text = (f"  > Extrude {extrude['index'] + 1}: "
-                            f" {extrude['start_magnitude']:.3f} > {extrude['end_magnitude']:.3f}")
+        for extrude_idx, extrude in enumerate(feature['extrudes']):
+            extrude_text = (f"  > Extrude {extrude_idx + 1}: "
+                            f"{extrude.get('start_magnitude', 0):.3f} > {extrude.get('end_magnitude', 0):.3f}")
             text_surface = font.render(extrude_text, True, color)
             screen.blit(text_surface, (start_x + 20, current_y))
             current_y += line_height

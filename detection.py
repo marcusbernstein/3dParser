@@ -452,92 +452,112 @@ def build_extrudes(raw_extrude_data, sketches, vertices, tolerance=1e-3):
         'sketch_groups': sketch_groups
     }
 
-def build_feature_tree(sketches, extrude_data):
-    print("\n=== Build Feature Tree Debugging ===")
-    print(f"Number of sketches: {len(sketches)}")
-    print(f"Number of extrudes: {len(extrude_data['extrudes'])}")
-    print(f"Number of sketch groups: {len(extrude_data['sketch_groups'])}")
-
-    # Initialize sketch-to-extrude mapping
-    sketch_to_extrudes = defaultdict(list)
-    sketch_usage = defaultdict(int)
-
-    # Process each extrude and map it to its start sketch
-    for i, extrude in enumerate(extrude_data['extrudes']):
-        start_sketch_index = extrude.get('start_sketch_index')
-        end_sketch_index = extrude.get('end_sketch_index')
-        direction = extrude.get('direction')
-        
-        if start_sketch_index is not None and end_sketch_index is not None:
-            # Get the actual magnitudes from the sketches
-            start_magnitude = sketches[start_sketch_index]['magnitude'] * direction
-            end_magnitude = sketches[end_sketch_index]['magnitude']
-            
-            # Ensure the direction is maintained based on logical building order
-            # Normal case - building upward
-            extrude_info = {
-                'index': i,
-                'start_magnitude': start_magnitude,
-                'end_magnitude': end_magnitude,
-                'distance': abs(end_magnitude - start_magnitude),
-                'direction': direction,
-                'end_sketch_index': end_sketch_index
-            }
-            sketch_to_extrudes[start_sketch_index].append(extrude_info)
-            sketch_usage[start_sketch_index] += 1
-            sketch_usage[end_sketch_index] += 1
-
-    # Build feature tree
-    feature_tree = []
-    processed_sketches = set()
-
-    # Process sketches in order of magnitude
-    sorted_sketches = sorted(sketches, key=lambda s: abs(s['magnitude']))
+def classify_feature_type(sketch, extrude, previous_features):
+    """
+    Advanced feature classification considering geometric context
     
-    for sketch in sorted_sketches:
-        sketch_index = sketch['index']
-        
-        # Skip if this sketch is only used as an end plane
-        if sketch_usage[sketch_index] == 0:
-            continue
-            
-        normal = sketch['normal']
-        magnitude = round(float(sketch['magnitude']), 3)
+    Args:
+        sketch: Current sketch
+        extrude: Current extrude
+        previous_features: List of previously processed features
+    """
+    normal = np.array(sketch['normal'])
+    direction = extrude.get('direction', 1)
+    magnitude = abs(sketch['magnitude'])
+    
+    # Base plane detection (horizontal plane)
+    if np.allclose(normal, (0, 0, 1), atol=0.1) and direction > 0:
+        return 'Base Extrude'
+    
+    # Emboss vs Cutout detection
+    def is_inner_geometry(current_edges):
+        """Determine if a sketch represents an inner geometry"""
+        return len(current_edges) < 4  # Simple heuristic for inner geometries
+    
+    current_edges = sketch.get('edges', [])
+    
+    if direction < 0:
+        # Potential cutout
+        if is_inner_geometry(current_edges):
+            return 'Inner Cutout'
+        return 'Outer Cutout'
+    
+    if direction > 0:
+        # Potential emboss
+        if is_inner_geometry(current_edges):
+            return 'Inner Emboss'
+        return 'Side Extension'
+    
+    return 'Undefined Feature'
 
-        # Determine normal representation
-        if isinstance(normal, (tuple, list, np.ndarray)):
-            if np.allclose(normal, (1, 0, 0), atol=0.1):
-                normal_repr = 'X'
-            elif np.allclose(normal, (0, 1, 0), atol=0.1):
-                normal_repr = 'Y'
-            elif np.allclose(normal, (0, 0, 1), atol=0.1):
-                normal_repr = 'Z'
-            else:
-                normal_repr = str(tuple(round(n, 3) for n in normal))
+def build_feature_tree(sketches, extrude_data):
+    feature_tree = []
+    used_extrude_indices = set()
+
+    # Step 1: Group sketches into parent-child relationships
+    def group_sketches_by_hierarchy(sketches):
+        hierarchy = defaultdict(list)
+        for i, parent_sketch in enumerate(sketches):
+            for j, child_sketch in enumerate(sketches):
+                if i != j and is_contained(child_sketch['edges'], parent_sketch['edges']):
+                    hierarchy[i].append(j)
+        return hierarchy
+
+    def is_contained(inner_edges, outer_edges):
+        """Determine if all edges of one sketch are within another."""
+        return all(any(e1 == e2 for e2 in outer_edges) for e1 in inner_edges)
+
+    def classify_feature_type(sketch, extrudes, parent_edges):
+        """Classify feature type based on geometry relationships."""
+        direction = extrudes[0]['direction'] if extrudes else 1
+        sketch_edges = sketch.get('edges', [])
+        is_inner = len(sketch_edges) < len(parent_edges) and is_contained(sketch_edges, parent_edges)
+
+        if direction < 0:  # Cutout
+            return 'Inner Cutout' if is_inner else 'Outer Cutout'
+        elif direction > 0:  # Emboss
+            return 'Inner Emboss' if is_inner else 'Outer Emboss'
         else:
-            normal_repr = normal
+            return 'Base Feature'
 
-        # Get extrudes that start from this sketch
-        sketch_extrudes = sketch_to_extrudes[sketch_index]
-        
-        # Sort extrudes by end magnitude
-        sketch_extrudes.sort(key=lambda e: abs(e['end_magnitude']))
+    sketch_hierarchy = group_sketches_by_hierarchy(sketches)
 
-        feature_tree_item = {
-            'index': len(feature_tree),  # Assign new sequential index
-            'sketch_index': sketch_index,  # Keep original sketch index for reference
-            'normal': normal_repr,
-            'magnitude': magnitude * direction,
-            'extrudes': sketch_extrudes
-        }
-        feature_tree.append(feature_tree_item)
-        processed_sketches.add(sketch_index)
+    # Step 2: Build features
+    for parent_index, parent_sketch in enumerate(sketches):
+        if parent_index in used_extrude_indices:
+            continue
 
-    # Debug output
-    print("\nFeature Tree Structure:")
-    for feature in feature_tree:
-        print(f"\nSketch {feature['sketch_index']} @ {feature['magnitude']}")
-        for extrude in feature['extrudes']:
-            print(f"  Extrude {extrude['index']} {extrude['start_magnitude']} -> {extrude['end_magnitude']}")
+        # Identify extrudes starting from this sketch
+        parent_extrudes = [
+            extrude for extrude_index, extrude in enumerate(extrude_data['extrudes'])
+            if extrude['start_sketch_index'] == parent_index and extrude_index not in used_extrude_indices
+        ]
+
+        # Classify features for this sketch
+        if not parent_extrudes:
+            continue
+
+        parent_edges = parent_sketch.get('edges', [])
+        feature_type = classify_feature_type(parent_sketch, parent_extrudes, parent_edges)
+
+        # Add parent feature
+        feature_tree.append({
+            'sketch': parent_sketch,
+            'type': feature_type,
+            'extrudes': parent_extrudes,
+            'children': [
+                {
+                    'sketch': sketches[child_index],
+                    'type': classify_feature_type(sketches[child_index], [], parent_edges),
+                    'extrudes': [],
+                }
+                for child_index in sketch_hierarchy.get(parent_index, [])
+            ],
+        })
+
+        # Mark extrudes as used by their indices
+        for extrude_index, extrude in enumerate(extrude_data['extrudes']):
+            if extrude in parent_extrudes:
+                used_extrude_indices.add(extrude_index)
 
     return feature_tree
