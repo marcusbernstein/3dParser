@@ -10,8 +10,8 @@ FILE_DESCRIPTION(
 /* implementation_level */ '2;1');
 
 FILE_NAME(
-/* name */ 'hi there',
-/* time_stamp */ '2024-12-31T10:21:12Z',
+/* name */ 'hi ther',
+/* time_stamp */ '2024-12-31T10:23:12Z',
 /* author */ ('Marcus'),
 /* organization */ ('Marcus'),
 /* preprocessor_version */ 'ST-DEVELOPER v20',
@@ -26,43 +26,50 @@ DATA;
 GEOMETRIC_REPRESENTATION_CONTEXT(3)
 GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#11))
 GLOBAL_UNIT_ASSIGNED_CONTEXT((#12,#16,#17))
-REPRESENTATION_CONTEXT('Part 1','TOP_LEVEL_ASSEMBLY_PART')); /* 185 */
+REPRESENTATION_CONTEXT('Part 1','TOP_LEVEL_ASSEMBLY_PART')); /* 10 */
+ /* Units Setup */
  #11=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(3.93700787401575E-7),#12,
- 'DISTANCE_ACCURACY_VALUE','Max imum Tolerance applied to model'); /*186*/
+ 'DISTANCE_ACCURACY_VALUE','Maximum Tolerance applied to model'); /* 11 */
  #12=(CONVERSION_BASED_UNIT('INCH',#14)
  LENGTH_UNIT()
- NAMED_UNIT(#13)); /* 189 */
-  #13=DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.); /* 190 */
-  #14=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#15); /* 191 */
-   #15=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.)); /* 192 */
-   #16=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.)); /* 188 */
-   #17=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT()); /* 187 */
-#18=SHAPE_REPRESENTATION('Part 1',(#19),#10); /* 123 */
- #19=AXIS2_PLACEMENT_3D('',#20,#21,#22); /* 124 */
-  #20=CARTESIAN_POINT('',(0.,0.,0.)); /* 157 */
-  #21=DIRECTION('',(0.,0.,1.)); /* 131 */
-  #22=DIRECTION('',(1.,0.,0.)); /* 132 */
-#23=SHAPE_DEFINITION_REPRESENTATION(#24,#18); /* 122 */
- #24=PRODUCT_DEFINITION_SHAPE('','',#25); /* 193 */
-  #25=PRODUCT_DEFINITION('','',#26,#29); /* 194 */
-   #26=PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('','',#27, .NOT_KNOWN.); /* 196 */
-    #27=PRODUCT('Part 1','Part 1','Part 1',(#28)); /* 198 */
-     #28=MECHANICAL_CONTEXT('',#30,'mechanical'); /* 200 */
-   #29=DESIGN_CONTEXT('',#30,'design'); /* 195 */
-    #30=APPLICATION_CONTEXT('configuration controlled 3D designs of mechanical parts and assemblies');
-     #31=PRODUCT_RELATED_PRODUCT_CATEGORY('','',(#27)); /* 197 */
-     #32=PRODUCT_CATEGORY('',''); /* 199 */
-#33=APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',2010,#30);/* 201*/
-#34=PROPERTY_DEFINITION_REPRESENTATION(#35,#39); /* 10 */
-#35=PROPERTY_DEFINITION('pmi validation property','',#24); /* 14 */
-#36=REPRESENTATION('',(#16),#10); /* 12 */
-#37=VALUE_REPRESENTATION_ITEM('number of annotations',COUNT_MEASURE(0.)); /* 16 */
-#38=PROPERTY_DEFINITION_REPRESENTATION(#15,#13); /* 11 */
-#39=PROPERTY_DEFINITION('pmi validation property','',#24); /* 15 */
-#40=REPRESENTATION('',(#17),#10); /* 13 */
-#41=VALUE_REPRESENTATION_ITEM('number of views',COUNT_MEASURE(0.)); /* 17 */
-#42=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#44),#10); /* 19 */
-#43=SHAPE_REPRESENTATION_RELATIONSHIP('','',#18,#42); /* 18 */    
+ NAMED_UNIT(#13)); /* 12 */
+  #13=DIMENSIONAL_EXPONENTS(1.,0.,0.,0.,0.,0.,0.); /* 13 */
+  #14=LENGTH_MEASURE_WITH_UNIT(LENGTH_MEASURE(25.4),#15); /* 14 */
+  #15=(LENGTH_UNIT()NAMED_UNIT(*)SI_UNIT(.MILLI.,.METRE.)); /* 15 */
+  #16=(NAMED_UNIT(*)PLANE_ANGLE_UNIT()SI_UNIT($,.RADIAN.)); /* 16 */
+  #17=(NAMED_UNIT(*)SI_UNIT($,.STERADIAN.)SOLID_ANGLE_UNIT()); /* 17 */
+
+ /* Product and Context */ 
+ #18=PRODUCT_DEFINITION_SHAPE('','',#19); /* 24 */
+  #19=PRODUCT_DEFINITION('','',#21,#20); /* 25 */
+   #20=DESIGN_CONTEXT('',#24,'design'); /* 29 */
+   #21=PRODUCT_DEFINITION_FORMATION_WITH_SPECIFIED_SOURCE('','',#22, .NOT_KNOWN.); /* 26 */
+    #22=PRODUCT('Part 1','Part 1','Part 1',(#23)); /* 27 */
+     #23=MECHANICAL_CONTEXT('',#24,'mechanical'); /* 200 */
+      #24=APPLICATION_CONTEXT('configuration controlled 3D designs of mechanical parts and assemblies');
+     #25=PRODUCT_RELATED_PRODUCT_CATEGORY('','',(#22)); /* 31 */
+     #26=PRODUCT_CATEGORY('',''); /* 32 */
+
+  /* Representation */
+#27=SHAPE_DEFINITION_REPRESENTATION(#18,#39); /* 23 */
+#28=REPRESENTATION('',(#16),#10); /* 12 */
+#29=REPRESENTATION('',(#17),#10); /* 13 */
+#30=PROPERTY_DEFINITION_REPRESENTATION(#15,#13); /* 11 */
+#31=VALUE_REPRESENTATION_ITEM('number of annotations',COUNT_MEASURE(0.)); /* 16 */
+#32=VALUE_REPRESENTATION_ITEM('number of views',COUNT_MEASURE(0.)); /* 17 */
+#33=APPLICATION_PROTOCOL_DEFINITION('international standard','config_control_design',2010,#24);/* 201*/
+#34=PROPERTY_DEFINITION_REPRESENTATION(#35,#39); /* 34 */
+ #35=PROPERTY_DEFINITION('pmi validation property','',#18); /* 35 */
+ #36=PROPERTY_DEFINITION('pmi validation property','',#18); /* 39 */
+
+#37=ADVANCED_BREP_SHAPE_REPRESENTATION('',(#44),#10); /* 42 */
+#38=SHAPE_REPRESENTATION_RELATIONSHIP('','',#39,#37); /* 43 */    
+ /* Origin */
+ #39=SHAPE_REPRESENTATION('Part 1',(#40),#10); /* 18 */
+  #40=AXIS2_PLACEMENT_3D('',#41,#42,#43); /* 19 */
+   #41=CARTESIAN_POINT('',(0.,0.,0.)); /* 20 */
+   #42=DIRECTION('',(0.,0.,1.)); /* 21 */
+   #43=DIRECTION('',(1.,0.,0.)); /* 22 */
 
 #44=MANIFOLD_SOLID_BREP('Part 1',#45); /* 121 */
  #45=CLOSED_SHELL('',(#46,#47,#48,#49,#50,#51));
@@ -171,14 +178,5 @@ REPRESENTATION_CONTEXT('Part 1','TOP_LEVEL_ASSEMBLY_PART')); /* 185 */
          #191=AXIS2_PLACEMENT_3D('',#171,#126,#124); /* 128 */
          #192=AXIS2_PLACEMENT_3D('',#171,#144,#124); /* 129 */
          #193=AXIS2_PLACEMENT_3D('',#172,#144,#124); /* 130 */
-#194=MECHANICAL_DESIGN_GEOMETRIC_PRESENTATION_REPRESENTATION('',(#195), #10); /* 184 */
-#195=STYLED_ITEM('',(#196),#44); /* 113 */
-#196=PRESENTATION_STYLE_ASSIGNMENT((#197)); /* 114 */
-#197=SURFACE_STYLE_USAGE(.BOTH.,#198); /* 115 */
-#198=SURFACE_SIDE_STYLE('',(#199)); /* 116 */
-#199=SURFACE_STYLE_FILL_AREA(#200); /* 117 */
-#200=FILL_AREA_STYLE('',(#201)); /* 118 */
-#201=FILL_AREA_STYLE_COLOUR('',#202); /* 119 */
-#202=COLOUR_RGB('',0.5,0.5,0.5); /* 120 */
 ENDSEC;
 END-ISO-10303-21;
