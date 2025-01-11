@@ -1,16 +1,242 @@
-import math
-import numpy as np
-from stl_parser import *
-
 from datetime import datetime
+from stl_parser import *
+import numpy as np
 
-vertices, triangles, edges = parse('Unit Test.stl')
 
-def create_file(step_content, filename="Tester File.step"):
-    with open(filename, 'w') as f:
-        f.write(step_content)
+def validate_geometry(vertices, edges, triangles):
+    """
+    Validates geometric consistency and returns normalized indices
+    """
+    # First filter out degenerate triangles
+    valid_triangles = []
+    for i, (v1, v2, v3, normal) in enumerate(triangles):
+        if v1 == v2 or v2 == v3 or v3 == v1:
+            print(f"Removing degenerate triangle {i}: vertices ({v1}, {v2}, {v3})")
+            continue
+        valid_triangles.append((v1, v2, v3, normal))
+    
+    print(f"Removed {len(triangles) - len(valid_triangles)} degenerate triangles")
+    
+    # Now generate edges from valid triangles only
+    edge_set = set()
+    for v1, v2, v3, _ in valid_triangles:
+        # Ensure vertex indices are valid
+        norm_v1 = v1 % len(vertices)
+        norm_v2 = v2 % len(vertices)
+        norm_v3 = v3 % len(vertices)
+        
+        # Add edges with normalized indices
+        edge_set.add(tuple(sorted([norm_v1, norm_v2])))
+        edge_set.add(tuple(sorted([norm_v2, norm_v3])))
+        edge_set.add(tuple(sorted([norm_v3, norm_v1])))
+    
+    # Convert edge set back to list
+    normalized_edges = list(edge_set)
+    
+    return normalized_edges, valid_triangles
 
-intro = f'''ISO-10303-21;
+def get_perpendicular_vectors(normal):
+    """
+    Returns two perpendicular vectors to the given normal vector
+    """
+    normal = np.array(normal)
+    # First perpendicular vector using cross product with (0,0,1) or (1,0,0)
+    if abs(normal[2]) < 0.9:
+        perp1 = np.cross(normal, [0, 0, 1])
+    else:
+        perp1 = np.cross(normal, [1, 0, 0])
+    perp1 = perp1 / np.linalg.norm(perp1)
+    
+    # Second perpendicular vector
+    perp2 = np.cross(normal, perp1)
+    perp2 = perp2 / np.linalg.norm(perp2)
+    
+    return tuple(perp1), tuple(perp2)
+
+def generate_step_entities(vertices, edges, triangles, start_id=100):
+    """
+    Generates complete STEP entities with proper sequencing and references
+    """
+    entities = []
+    current_id = start_id
+    
+    # Tracking dictionaries for entity references
+    mappings = {
+        'cartesian_points': {},  # vertex_idx -> id
+        'vertex_points': {},     # vertex_idx -> id
+        'directions': {},        # (dx,dy,dz) -> id
+        'vectors': {},          # edge_idx -> id
+        'lines': {},            # edge_idx -> id
+        'edge_curves': {},      # edge_idx -> id
+        'oriented_edges': {},   # (edge_idx, direction) -> id
+        'edge_loops': {},       # triangle_idx -> id
+        'face_bounds': {},      # triangle_idx -> id
+        'axis_placements': {},  # triangle_idx -> id
+        'planes': {},           # triangle_idx -> id
+        'faces': {}            # triangle_idx -> id
+    }
+    
+    # 1. Cartesian Points
+    for i, (x, y, z) in enumerate(vertices):
+        entities.append(f"#{current_id}=CARTESIAN_POINT('',({x:.6f},{y:.6f},{z:.6f})); /* vertex {i} */")
+        mappings['cartesian_points'][i] = current_id
+        current_id += 1
+    
+    # 2. Vertex Points
+    for i in range(len(vertices)):
+        entities.append(f"#{current_id}=VERTEX_POINT('',#{mappings['cartesian_points'][i]}); /* vertex point {i} */")
+        mappings['vertex_points'][i] = current_id
+        current_id += 1
+    
+    # 3. Edge Directions and Vectors
+    for i, (v1, v2) in enumerate(edges):  # Make sure this loops through ALL edges
+        # Calculate direction vector
+        p1 = np.array(vertices[v1])
+        p2 = np.array(vertices[v2])
+        direction = p2 - p1
+        direction = direction / np.linalg.norm(direction)
+        direction_tuple = tuple(direction)
+    
+        # Create or reuse direction
+        if direction_tuple not in mappings['directions']:
+            entities.append(f"#{current_id}=DIRECTION('',({direction[0]:.6f},{direction[1]:.6f},{direction[2]:.6f})); /* edge {i} direction */")
+            mappings['directions'][direction_tuple] = current_id
+            current_id += 1
+    
+        # Create vector
+        entities.append(f"#{current_id}=VECTOR('',#{mappings['directions'][direction_tuple]},1.0); /* edge {i} vector */")
+        mappings['vectors'][i] = current_id
+        current_id += 1
+
+    # 4. Lines
+    for i, (v1, v2) in enumerate(edges):  # This should process ALL edges
+        entities.append(f"#{current_id}=LINE('',#{mappings['cartesian_points'][v1]},#{mappings['vectors'][i]}); /* edge {i} line */")
+        mappings['lines'][i] = current_id
+        current_id += 1
+
+    # 5. Edge Curves
+    for i, (v1, v2) in enumerate(edges):  # This should process ALL edges
+        entities.append(f"#{current_id}=EDGE_CURVE('',#{mappings['vertex_points'][v1]},#{mappings['vertex_points'][v2]},#{mappings['lines'][i]},.T.); /* edge {i} curve */")
+        mappings['edge_curves'][i] = current_id
+        current_id += 1
+    print(f"Created edge curves: {len(mappings['edge_curves'])}")
+    print(f"Total edges: {len(edges)}")
+    assert len(mappings['edge_curves']) == len(edges), "Not all edges have corresponding curves!"
+    # 6. Oriented Edges
+    # Modify the edge lookup creation to be more robust
+    edge_lookup = {}
+    for i, (v1, v2) in enumerate(edges):
+        edge_lookup[(v1, v2)] = i
+        edge_lookup[(v2, v1)] = i  # Add reverse direction
+        
+    # Verify all triangle edges exist
+    missing_edges = []
+    for i, (v1, v2, v3, normal) in enumerate(triangles):
+        triangle_edges = [(v1, v2), (v2, v3), (v3, v1)]
+        for edge in triangle_edges:
+            if edge not in edge_lookup and edge[::-1] not in edge_lookup:
+                missing_edges.append(edge)
+                
+    if missing_edges:
+        # Add missing edges to both edges list and lookup
+        for edge in missing_edges:
+            edge_idx = len(edges)
+            edges.append(edge)
+            edge_lookup[edge] = edge_idx
+            edge_lookup[edge[::-1]] = edge_idx
+            
+    print(f"Number of edges: {len(edges)}")
+    print(f"Edge indices used in triangles:")
+    edge_indices_used = set()
+    for i, (v1, v2, v3, normal) in enumerate(triangles):
+        edge1 = edge_lookup.get((v1, v2)) or edge_lookup.get((v2, v1))
+        edge2 = edge_lookup.get((v2, v3)) or edge_lookup.get((v3, v2))
+        edge3 = edge_lookup.get((v3, v1)) or edge_lookup.get((v1, v3))
+        edge_indices_used.update([edge1, edge2, edge3])
+    print(f"Min edge index: {min(edge_indices_used)}")
+    print(f"Max edge index: {max(edge_indices_used)}")
+    
+    for i, (v1, v2, v3, normal) in enumerate(triangles):
+        edge1 = edge_lookup.get((v1, v2)) or edge_lookup.get((v2, v1))
+        edge2 = edge_lookup.get((v2, v3)) or edge_lookup.get((v3, v2))
+        edge3 = edge_lookup.get((v3, v1)) or edge_lookup.get((v1, v3))
+        
+        if None in (edge1, edge2, edge3):
+            raise ValueError(f"Triangle {i} ({v1}, {v2}, {v3}) contains undefined edges")
+            
+        # Create oriented edges
+        for edge_idx in (edge1, edge2, edge3):
+            key = (i, edge_idx)
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{mappings['edge_curves'][edge_idx]},.T.); /* triangle {i} oriented edge */")
+            mappings['oriented_edges'][key] = current_id
+            current_id += 1
+    # 7. Edge Loops
+    for i, (v1, v2, v3, normal) in enumerate(triangles):
+        edge1 = edge_lookup.get((v1, v2)) or edge_lookup.get((v2, v1))
+        edge2 = edge_lookup.get((v2, v3)) or edge_lookup.get((v3, v2))
+        edge3 = edge_lookup.get((v3, v1)) or edge_lookup.get((v1, v3))
+        
+        entities.append(f"#{current_id}=EDGE_LOOP('',(#{mappings['oriented_edges'][(i,edge1)]},#{mappings['oriented_edges'][(i,edge2)]},#{mappings['oriented_edges'][(i,edge3)]})); /* triangle {i} loop */")
+        mappings['edge_loops'][i] = current_id
+        current_id += 1
+    
+    # 8. Face Bounds
+    for i in range(len(triangles)):
+        entities.append(f"#{current_id}=FACE_BOUND('',#{mappings['edge_loops'][i]},.T.); /* triangle {i} bound */")
+        mappings['face_bounds'][i] = current_id
+        current_id += 1
+    
+    # 9. Triangle Normal Directions and Axis Placements
+    for i, (v1, v2, v3, normal) in enumerate(triangles):
+        # Get perpendicular vectors
+        perp1, perp2 = get_perpendicular_vectors(normal)
+        
+        # Add normal direction
+        entities.append(f"#{current_id}=DIRECTION('',({normal[0]:.6f},{normal[1]:.6f},{normal[2]:.6f})); /* triangle {i} normal */")
+        normal_id = current_id
+        current_id += 1
+        
+        # Add perpendicular direction
+        entities.append(f"#{current_id}=DIRECTION('',({perp1[0]:.6f},{perp1[1]:.6f},{perp1[2]:.6f})); /* triangle {i} reference direction */")
+        perp_id = current_id
+        current_id += 1
+        
+        # Create axis placement
+        entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{mappings['cartesian_points'][v1]},#{normal_id},#{perp_id}); /* triangle {i} axis */")
+        mappings['axis_placements'][i] = current_id
+        current_id += 1
+    
+    # 10. Planes
+    for i in range(len(triangles)):
+        entities.append(f"#{current_id}=PLANE('',#{mappings['axis_placements'][i]}); /* triangle {i} plane */")
+        mappings['planes'][i] = current_id
+        current_id += 1
+    
+    # 11. Advanced Faces
+    for i in range(len(triangles)):
+        entities.append(f"#{current_id}=ADVANCED_FACE('',(#{mappings['face_bounds'][i]}),#{mappings['planes'][i]},.T.); /* triangle {i} face */")
+        mappings['faces'][i] = current_id
+        current_id += 1
+    
+    # 12. Closed Shell
+    face_list = ",".join([f"#{mappings['faces'][i]}" for i in range(len(triangles))])
+    entities.append(f"#100000=CLOSED_SHELL('',({face_list})); /* complete shell */")
+    return "\n".join(entities), current_id, mappings
+
+
+
+
+def write_step_file(vertices, edges, triangles, filename="output.step"):
+    """
+    Main function to write STEP file
+    """
+    # Validate geometry
+    edges, triangles = validate_geometry(vertices, edges, triangles)
+    print(f"After validation:")
+    print(f"Total edges: {len(edges)}")
+    print(f"Edge sample: {edges[:3]}")
+    # Generate standard intro content
+    intro = """ISO-10303-21;
 HEADER;
 FILE_DESCRIPTION(
 /* description */ ('STEP AP203'),
@@ -71,244 +297,35 @@ REPRESENTATION_CONTEXT('Part 1','TOP_LEVEL_ASSEMBLY_PART')); /* 10 */
    #41=CARTESIAN_POINT('',(0.,0.,0.)); /* 20 */
    #42=DIRECTION('',(0.,0.,1.)); /* 21 */
    #43=DIRECTION('',(1.,0.,0.)); /* 22 */
-#44=MANIFOLD_SOLID_BREP('Part 1',#200); /* 121 */'''
-
-
-outro = f'''ENDSEC;
-END-ISO-10303-21;
-'''
-def cartesian_points(vertices, counter=100):
-    points_text = []
-    for x, y, z in vertices:
-        points_text.append(f"#{counter}=CARTESIAN_POINT('',({x:.1f},{y:.1f},{z:.1f}));\n")
-        counter += 1
-    return points_text, counter
-
-def vertex_points(vertices, counter):
-       vertex_text = []
-       cartesian_ref = 100
-       for x in vertices:
-           vertex_text.append(f" #{counter}=VERTEX_POINT('',#{cartesian_ref});\n")
-           cartesian_ref += 1
-           counter += 1
-       return vertex_text, counter
-def calculate_line_direction(p1, p2):
-    # Convert points to numpy arrays
-    p1_arr = np.array(p1)
-    p2_arr = np.array(p2)
+#44=MANIFOLD_SOLID_BREP('Part 1',#100000); /* 121 */
+"""
     
-    # Calculate direction vector
-    direction = p2_arr - p1_arr
+    # Generate main entity content
+    entity_text, final_id, mappings = generate_step_entities(vertices, edges, triangles)
     
-    # Normalize the vector
-    norm = np.linalg.norm(direction)
-    if norm > 0:
-        direction = direction / norm
+    outro = """ENDSEC;
+END-ISO-10303-21;"""
+
+    # Combine all content
+    step_content = intro + "\n" + entity_text + "\n" + outro
     
-    return tuple(direction)
-
-def directions(edges, vertices, counter):
-    direction_text = []
-    direction_map = {}
+    # Write file
+    with open(filename, 'w') as f:
+        f.write(step_content)
     
-    for p1_idx, p2_idx in edges:
-        direction = calculate_line_direction(vertices[p1_idx], vertices[p2_idx])
-        if direction not in direction_map:
-            direction_map[direction] = counter
-            x, y, z = direction
-            direction_text.append(f"#{counter}=DIRECTION('',({x:.1f},{y:.1f},{z:.1f}));\n")
-            counter += 1
-            
-    return direction_text, counter, direction_map
-
-def vectors(edges, vertices, direction_map, counter):
-    vector_text = []
-    vector_map = {}
+    # Print debug info
+    print(f"Successfully wrote STEP file:")
+    print(f"- {len(vertices)} vertices")
+    print(f"- {len(edges)} edges")
+    print(f"- {len(triangles)} triangles")
+    print(f"- {final_id - 100} total entities")
     
-    for p1_idx, p2_idx in edges:
-        direction = calculate_line_direction(vertices[p1_idx], vertices[p2_idx])
-        direction_id = direction_map[direction]
-        vector_id = counter
-        vector_text.append(f" #{counter}=VECTOR('',#{direction_id},39.3700787401575);\n")
-        vector_map[(p1_idx, p2_idx)] = vector_id
-        counter += 1
-            
-    return vector_text, counter, vector_map
+    return True
 
-def lines(edges, vector_map, counter):
-    line_text = []
-    
-    for i, (p1_idx, p2_idx) in enumerate(edges):
-        cartesian_id = 100 + p1_idx  # Starting point reference
-        vector_id = vector_map[(p1_idx, p2_idx)]
-        line_text.append(f" #{counter}=LINE('',#{cartesian_id},#{vector_id}); /* ({p1_idx}, {p2_idx}) */\n")
-        counter += 1
-        
-    return line_text, counter
+vertices, triangles, edges = parse('Shelf.stl')
+print("Sample of first few elements:")
+print(f"First 3 vertices: {vertices[:3]}")
+print(f"First 3 edges: {edges[:3]}")
+print(f"First 3 triangles: {triangles[:3]}")
+write_step_file(vertices, edges, triangles, "output.step")
 
-def edge_curves(edges, counter):
-   edge_curve_text = []
-   vertex_start = 100 + len(vertices)  # First vertex_point ID
-   line_start = counter - len(edges)   # First line ID
-   
-   for i, (p1_idx, p2_idx) in enumerate(edges):
-       v1_id = vertex_start + p1_idx
-       v2_id = vertex_start + p2_idx
-       line_id = line_start + i
-       edge_curve_text.append(f"#{counter}=EDGE_CURVE('',#{v1_id},#{v2_id},#{line_id},.T.); /* ({p1_idx}, {p2_idx}) */\n")
-       counter += 1
-       
-   return edge_curve_text, counter
-
-def oriented_edges(triangles, edges, counter_start):
-    # Map edge curve IDs (starting from edge_curve_start)
-    edge_curve_start = counter_start - len(edges)
-    edge_to_curve = {tuple(sorted(edge)): edge_curve_start + i for i, edge in enumerate(edges)}
-    
-    print("Edge to curve mapping:", edge_to_curve)  # Debug
-    
-    oriented_text = []
-    oriented_map = {}
-    counter = counter_start
-    
-    # First create all oriented edges (one per edge curve)
-    oriented_edge_lookup = {}
-    for curve_id in range(edge_curve_start, edge_curve_start + len(edges)):
-        oriented_text.append(f"#{counter}=ORIENTED_EDGE('',*,*,#{curve_id},.T.);\n")
-        oriented_edge_lookup[curve_id] = counter
-        counter += 1
-    
-    # Then map triangles to their oriented edges
-    for tri_idx, (p1, p2, p3, _) in enumerate(triangles):
-        tri_edges = [(p1, p2), (p2, p3), (p3, p1)]
-        tri_oriented_edges = []
-        
-        print(f"Triangle {tri_idx}: {tri_edges}")  # Debug
-        
-        for edge in tri_edges:
-            sorted_edge = tuple(sorted(edge))
-            print(f"Looking for edge: {sorted_edge}")  # Debug
-            if sorted_edge in edge_to_curve:
-                curve_id = edge_to_curve[sorted_edge]
-                oriented_edge_id = oriented_edge_lookup[curve_id]
-                tri_oriented_edges.append(oriented_edge_id)
-            else:
-                print(f"Warning: Edge {sorted_edge} not found in edge_to_curve")  # Debug
-        
-        if len(tri_oriented_edges) != 3:
-            print(f"Warning: Triangle {tri_idx} only has {len(tri_oriented_edges)} oriented edges")  # Debug
-        
-        oriented_map[tri_idx] = tri_oriented_edges
-    
-    return oriented_text, oriented_map, counter
-
-def edge_loops(triangles, oriented_map, counter):
-    loop_text = []
-    for tri_idx in range(len(triangles)):
-        oriented_edges = oriented_map[tri_idx]
-        if len(oriented_edges) == 3:
-            e1, e2, e3 = oriented_edges
-            loop_text.append(f"#{counter}=EDGE_LOOP('',(#{e1},#{e2},#{e3}));\n")
-            counter += 1
-        else:
-            print(f"Skipping triangle {tri_idx} due to insufficient edges: {oriented_edges}")
-    return loop_text, counter
-
-def face_bounds(triangles, counter):
-    face_bounds_text = []
-    face_ref = counter - len(triangles)
-    for x in triangles:
-        face_bounds_text.append(f" #{counter}=FACE_BOUND('',#{face_ref});\n")
-        face_ref += 1
-        counter += 1
-    return face_bounds_text, counter
-
-def get_perpendicular_direction(normal):
-   # Get perpendicular vector using cross product with (0,0,1) or (1,0,0)
-   if abs(normal[2]) < 0.9:
-       perp = np.cross(normal, [0,0,1])
-   else:
-       perp = np.cross(normal, [1,0,0])
-   return perp /np.linalg.norm(perp)
-
-def axes(triangles, counter):
-   axis_text = []
-   for idx, (p1, _, _, normal) in enumerate(triangles):
-       cart_point = 100 + p1  # Reference first vertex as placement point
-       perp = get_perpendicular_direction(normal)
-       
-       # Add normal and perpendicular directions
-       axis_text.append(f"#{counter}=DIRECTION('',({normal[0]:.1f},{normal[1]:.1f},{normal[2]:.1f}));\n")
-       normal_id = counter
-       counter += 1
-       
-       axis_text.append(f"#{counter}=DIRECTION('',({perp[0]:.1f},{perp[1]:.1f},{perp[2]:.1f}));\n")
-       perp_id = counter
-       counter += 1
-       
-       # Create placement
-       axis_text.append(f"#{counter}=AXIS2_PLACEMENT_3D('',#{cart_point},#{normal_id},#{perp_id});\n")
-       counter += 1
-       
-   return axis_text, counter
-
-def planes(triangles, counter):
-    planes_text = []
-    planes_ref = counter - (len(triangles)*2)
-    for x in triangles:
-        planes_text.append(f" #{counter}=PLANE('',#{planes_ref});\n")
-        planes_ref += 1
-        counter += 1
-    return planes_text, counter
-
-def faces(triangles, counter):
-    faces_text = []
-    faces_ref = counter - (len(triangles)*3)
-    for x in triangles:
-        faces_text.append(f" #{counter}=ADVANCED_FACE('',#{faces_ref});\n")
-        faces_ref += 1
-        counter += 1
-    return faces_text, counter
-
-def shell(triangles, counter):
-    shell_text = []
-    #shell_text.append()
-    faces_ref = counter - len(triangles)
-    for x in triangles:
-        shell_text.append(f" #{faces_ref},")
-        faces_ref += 1
-    return shell_text
-
-
-
-points_text, counter = cartesian_points(vertices)
-vertex_text, counter = vertex_points(vertices, counter)
-direction_text, counter, direction_map = directions(edges, vertices, counter)
-vector_text, counter, vector_map = vectors(edges, vertices, direction_map, counter)
-line_text, counter = lines(edges, vector_map, counter)
-edge_curve_text, counter = edge_curves(edges, counter)
-oriented_edges_text, oriented_map, counter = oriented_edges(triangles, edges, counter)
-edge_loops_text, counter = edge_loops(triangles, oriented_map, counter)
-face_bounds_text, counter = face_bounds(triangles, counter)
-axis_text, counter = axes(triangles, counter)
-planes_text, counter = planes(triangles, counter)
-faces_text, counter = faces(triangles, counter)
-shell_text = shell(triangles, counter)
-
-step_content = intro
-step_content += (''.join(points_text))
-step_content += (''.join(vertex_text))
-step_content += (''.join(direction_text))
-step_content += (''.join(vector_text))
-step_content += (''.join(line_text))
-step_content += (''.join(edge_curve_text))
-step_content += (''.join(oriented_edges_text))
-step_content += (''.join(edge_loops_text))
-step_content += (''.join(face_bounds_text))
-step_content += (''.join(axis_text))
-step_content += (''.join(planes_text))
-step_content += (''.join(faces_text))
-step_content += (''.join(shell_text))
-step_content += (''.join(outro))
-
-create_file(step_content)
