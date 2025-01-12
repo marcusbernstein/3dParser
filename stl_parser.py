@@ -1,7 +1,7 @@
 from typing import List, Tuple
 from collections import defaultdict
 
-def parse(file_path: str, decimal_places: int = 1) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, int, int, Tuple[float, float, float]]], List[Tuple[int, int]]]:
+def parse(file_path: str, decimal_places: int = 5) -> Tuple[List[Tuple[float, float, float]], List[Tuple[int, int, int, Tuple[float, float, float]]], List[Tuple[int, int]]]:
     unique_vertices = {}
     vertex_list = []
     triangles = []
@@ -56,6 +56,8 @@ def parse(file_path: str, decimal_places: int = 1) -> Tuple[List[Tuple[float, fl
                     v1, v2, v3 = current_triangle
                     if v1 == v2 or v2 == v3 or v3 == v1:
                         print(f"Warning: Degenerate triangle found at line {line_number}: vertices {current_triangle}")
+                        print(f"v1 {vertex_list[v1]} v2 {vertex_list[v2]} v3 {vertex_list[v3]}")
+
                         degenerate_count += 1
                     else:
                         # Add valid triangle with associated normal

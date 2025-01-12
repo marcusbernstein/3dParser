@@ -3,14 +3,12 @@ import pygame.freetype
 import math
 import numpy as np
 from detection import *
-from constants import *
 from stl_parser import *
 from rendering import *
 from builder import *
 
 def rotate(vertex: tuple, axis: str, angle: float) -> tuple:
     x, y, z = vertex
-
     if axis == 'x': return (x, y * math.cos(angle) - z * math.sin(angle), y * math.sin(angle) + z * math.cos(angle))
     elif axis == 'y': return (x * math.cos(angle) + z * math.sin(angle), y, -x * math.sin(angle) + z * math.cos(angle))
     elif axis == 'z': return (x * math.cos(angle) - y * math.sin(angle), x * math.sin(angle) + y * math.cos(angle), z)
@@ -24,9 +22,20 @@ def calculate_rotation_matrix(angle_x, angle_y, angle_z):
 
 def main():
     pygame.init()
-    screen = pygame.display.set_mode((width, height))
-    vertices, triangles, edges = parse('Tester.stl')
     
+    scale = 3
+    width = 1440
+    height = 750
+
+    left_offset = (width // 4, height // 2)
+    right_offset = ((width // 4) * 3, height // 2)
+    rotation_angle = 0.05
+    
+    screen = pygame.display.set_mode((width, height))
+    vertices, triangles, edges = parse('tester.stl')
+    write_step_file(vertices, edges, triangles, "output.step")
+    font = pygame.font.SysFont(None, 24)
+
     rotation_x = 0
     rotation_y = 0
     rotation_z = 0
@@ -39,10 +48,6 @@ def main():
     sketches = build_sketches(sketch_planes, vertices, triangles)
     extrudes = build_extrudes(extrudes, sketches, vertices)
     feature_tree = build_feature_tree(sketches, extrudes)
-    
-    # Generate STEP file directly from sketches and extrudes
-    #generate_step_file(sketches, extrudes, output_file="output.step")
-    #print("STEP file 'output.step' generated successfully!")
     
     # Create color scheme
     num_features = max(len(sketch_planes), len(extrudes['extrudes']), 40)
@@ -68,19 +73,16 @@ def main():
         if keys[pygame.K_UP]: rotation_x -= rotation_angle
         if keys[pygame.K_DOWN]: rotation_x += rotation_angle
         
-        # Calculate rotation matrix
         rotation_matrix = calculate_rotation_matrix(rotation_x, rotation_y, rotation_z)
-        
-        # Clear screen
         screen.fill((0, 0, 0))
         
         # Render geometry and features
-        render_feature_tree(screen, feature_tree, colors)
+        render_feature_tree(screen, feature_tree, colors, font)
         render_stl(screen, vertices, triangles, scale, right_offset, rotation_matrix)
         render_sketch_planes(screen, vertices, sketches, scale, left_offset, rotation_matrix, colors)
         render_edges(screen, vertices, edges, scale, left_offset, rotation_matrix)
         #render_extrudes(screen, extrudes, sketches, scale, left_offset, rotation_matrix, colors)
-        render_sketches(screen, sketches, colors)
+        render_sketches(screen, sketches, colors, font)
         
         pygame.display.flip()
         clock.tick(60)
