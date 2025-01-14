@@ -32,8 +32,11 @@ def main():
     rotation_angle = 0.05
     
     screen = pygame.display.set_mode((width, height))
-    vertices, triangles, edges = parse('tester.stl')
+    vertices, triangles, edges = parse('cylinder.stl')
     write_step_file(vertices, edges, triangles, "output.step")
+    cylindrical_faces = detect_cylindrical_faces(vertices, triangles)
+    print_debug_info(vertices, triangles, cylindrical_faces)
+
     font = pygame.font.SysFont(None, 24)
 
     rotation_x = 0
@@ -54,7 +57,7 @@ def main():
     colors = create_color_scheme(num_features)
     
     # Main rendering loop
-    running = True
+    running = False
     clock = pygame.time.Clock()
     
     while running:
