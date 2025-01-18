@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 from collections import defaultdict
 from stl_parser import *
-
 import numpy as np
 
 def validate_geometry(vertices, edges, triangles):
@@ -48,11 +47,7 @@ def get_perpendicular_vectors(normal):
     perp2 = perp2 / np.linalg.norm(perp2)
     
     return tuple(perp1), tuple(perp2)
-def merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.0001):
-    """
-    Merge triangles that share two vertices and have the same normal vector.
-    Returns a list of merged triangle groups.
-    """
+def merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.001):
     def are_normals_equal(n1, n2):
         return np.allclose(n1, n2, rtol=normal_tolerance)
     
@@ -99,67 +94,63 @@ def merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.0001):
     return merged_groups
 
 def calculate_cylinder_properties(vertices, face_indices, triangles):
-    """
-    Calculate the properties of a cylindrical surface from a set of triangles.
-    
-    Args:
-        vertices: List of (x,y,z) vertex coordinates
-        face_indices: List of indices into triangles list that form the cylinder
-        triangles: List of (v1,v2,v3,normal) tuples representing triangles
-    
-    Returns:
-        tuple: (radius, center_point, axis_vector)
-    """
-    # Get all unique vertices used in the cylindrical face
-    unique_points = set()
-    normals = []
+    # Get face centers and normals
+    face_centers = []
+    face_normals = []
     for idx in face_indices:
         v1, v2, v3, normal = triangles[idx]
-        unique_points.update([v1, v2, v3])
-        normals.append(np.array(normal))
+        center = np.mean([vertices[v1], vertices[v2], vertices[v3]], axis=0)
+        face_centers.append(center)
+        face_normals.append(np.array(normal))
     
-    points = np.array([vertices[i] for i in unique_points])
+    face_centers = np.array(face_centers)
+    face_normals = np.array(face_normals)
     
-    # Calculate axis vector as average of cross products of adjacent normals
-    # This gives us better accuracy than just using one triangle's normal
+    # Calculate axis from cross products
     axis_vector = np.zeros(3)
-    for i in range(len(normals)):
-        cross = np.cross(normals[i], normals[(i+1)%len(normals)])
-        if np.dot(cross, axis_vector) < 0:  # Ensure consistent direction
-            cross = -cross
-        axis_vector += cross
+    for i in range(len(face_normals)):
+        cross = np.cross(face_normals[i], face_normals[(i+1)%len(face_normals)])
+        if np.linalg.norm(cross) > 1e-10:
+            cross = cross / np.linalg.norm(cross)
+            if np.dot(cross, axis_vector) < 0:
+                cross = -cross
+            axis_vector += cross
     axis_vector = axis_vector / np.linalg.norm(axis_vector)
     
-    # Find the extents of the cylinder along its axis
-    heights = np.dot(points - points[0], axis_vector)
-    min_height = np.min(heights)
-    max_height = np.max(heights)
-    mid_height = (min_height + max_height) / 2
+    # Project centers and normals onto plane perpendicular to axis
+    proj_centers = face_centers - np.outer(np.dot(face_centers - face_centers[0], axis_vector), axis_vector)
+    proj_normals = face_normals - np.outer(np.dot(face_normals, axis_vector), axis_vector)
+    proj_normals = np.array([n/np.linalg.norm(n) if np.linalg.norm(n) > 1e-10 else n for n in proj_normals])
     
-    # Project points onto plane perpendicular to axis
-    points_centered = points - points[0]  # Center around first point
-    point_projections = points_centered - np.outer(heights, axis_vector)
+    # Find center by intersecting normal lines
+    center_point = np.zeros(3)
+    count = 0
+    for i in range(len(proj_centers)):
+        for j in range(i+1, len(proj_centers)):
+            n1, n2 = proj_normals[i], proj_normals[j]
+            p1, p2 = proj_centers[i], proj_centers[j]
+            
+            # Solve for intersection of lines p1 + t1*n1 = p2 + t2*n2
+            A = np.column_stack([n1, -n2])
+            if np.linalg.matrix_rank(A) == 2:
+                b = p2 - p1
+                t1, t2 = np.linalg.solve(A.T @ A, A.T @ b)
+                intersection = p1 + t1 * n1
+                center_point += intersection
+                count += 1
     
-    # Find center by averaging projected points
-    center_projection = np.mean(point_projections, axis=0)
+    if count > 0:
+        center_point = center_point / count
+    else:
+        center_point = np.mean(proj_centers, axis=0)
     
-    # Calculate radius as average distance from projected center to projected points
-    radii = np.linalg.norm(point_projections - center_projection, axis=1)
-    diameter = np.mean(radii)
-    
-    # Calculate true center point by moving back to original coordinate system
-    # and positioning at middle height
-    center_point = points[0] + center_projection + axis_vector * mid_height
+    # Calculate diameter using distance from center to projected points
+    radii = np.linalg.norm(proj_centers - center_point, axis=1)
+    diameter = 2 * np.mean(radii)
     
     return diameter, tuple(center_point), tuple(axis_vector)
 
-
-
-def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.01, area_tolerance=0.01, normal_tolerance=0.0001, max_angle=np.pi/12):
-    """
-    Detect cylindrical faces in STL geometry, first merging coplanar triangles.
-    Returns list of tuples: (type, face_indices, radius, center_point, axis_vector)
-    """
+def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.05, area_tolerance=0.05, normal_tolerance=0.001, max_angle=np.pi/12):
     # First merge coplanar triangles
     merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance)
     def calculate_triangle_area(v1_idx, v2_idx, v3_idx):
@@ -266,8 +257,11 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.01, area_tol
                 
                 if abs(total_angle - 2 * np.pi) < angle_tolerance:
                     cylindrical_faces.append(("complete_cylinder", all_triangles))
+                    print("complete cylinder")
+                    print(total_angle)
                 else:
                     cylindrical_faces.append(("partial_cylinder", all_triangles))
+                    print("partial cylinder")
                 
                 processed.update(component)
     
@@ -485,9 +479,10 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
 
                 # Create points (following example structure)
                 # Bottom reference point
-                bottom_point = bottom_center + diameter * np.array(ref_dir)
+                radius = diameter/2
+                bottom_point = bottom_center + radius * np.array(ref_dir)
                 # Top reference point
-                top_point = top_center + diameter * np.array(ref_dir)
+                top_point = top_center + radius * np.array(ref_dir)
             
                 # 1. Create all CARTESIAN_POINTs
                 # Center point for cylindrical surface (like #214 in example)
@@ -546,11 +541,11 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 current_id += 1
             
                 # 5. Create CIRCLEs (like #20, #21 in example)
-                entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{diameter:.6f});")
+                entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{radius:.6f});")
                 bottom_circle_id = current_id
                 current_id += 1
             
-                entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{diameter:.6f});")
+                entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{radius:.6f});")
                 top_circle_id = current_id
                 current_id += 1
             
@@ -606,7 +601,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 current_id += 1
             
                 # 11. Create CYLINDRICAL_SURFACE (like #22 in example)
-                entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{diameter:.6f});")
+                entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{radius:.6f});")
                 surface_id = current_id
                 current_id += 1
             
@@ -618,14 +613,38 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 
             else:  # "partial_cylinder"
                 # Calculate points and vectors
+                # Replace the points/angles calculation section with:
                 points_rel = points - bottom_center
                 points_proj = points_rel - np.outer(np.dot(points_rel, axis_np), axis_np)
+                diameter /= 2
+                # Find boundary edges - edges that connect to non-cylindrical faces
+                boundary_vertices = set()
+                for idx in face_indices:
+                    v1, v2, v3, _ = triangles[idx]
+                    for e1, e2 in [(v1,v2), (v2,v3), (v3,v1)]:
+                        edge = tuple(sorted([e1, e2]))
+                        # Check if this edge connects to a non-cylindrical face
+                        is_boundary = False
+                        for i, (tv1, tv2, tv3, _) in enumerate(triangles):
+                            if i not in face_indices:  # Non-cylindrical face
+                                if edge[0] in (tv1, tv2, tv3) and edge[1] in (tv1, tv2, tv3):
+                                    is_boundary = True
+                                    break
+                        if is_boundary:
+                            boundary_vertices.update([e1, e2])
+
+                # Use boundary vertices to determine start/end points
+                boundary_points = np.array([vertices[i] for i in boundary_vertices])
+                boundary_proj = boundary_points - bottom_center
+                boundary_proj = boundary_proj - np.outer(np.dot(boundary_proj, axis_np), axis_np)
+
+                # Calculate angles from projected boundary points
                 angles = np.arctan2(
-                    np.dot(points_proj, np.cross(ref_dir, axis_np)),
-                    np.dot(points_proj, ref_dir)
+                    np.dot(boundary_proj, np.cross(ref_dir, axis_np)),
+                    np.dot(boundary_proj, ref_dir)
                 )
-                start_angle = np.min(angles)
-                end_angle = np.max(angles)
+                start_angle = np.max(angles)
+                end_angle = np.min(angles)
     
                 # Create key points
                 start_bottom = bottom_center + diameter * (
