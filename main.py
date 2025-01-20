@@ -32,11 +32,8 @@ def main():
     rotation_angle = 0.05
     
     screen = pygame.display.set_mode((width, height))
-    vertices, triangles, edges = parse('cylinder.stl')
+    vertices, triangles, edges = parse('Testersquare.stl')
     write_step_file(vertices, edges, triangles, "output.step")
-    cylindrical_faces = detect_cylindrical_faces(vertices, triangles)
-    print_debug_info(vertices, triangles, cylindrical_faces)
-
     font = pygame.font.SysFont(None, 24)
 
     rotation_x = 0
@@ -44,7 +41,7 @@ def main():
     rotation_z = 0
     
     # Detect geometric features
-    sketch_planes = detect_sketch_planes(vertices, triangles)
+    """sketch_planes = detect_sketch_planes(vertices, triangles)
     extrudes = detect_extrudes(sketch_planes, vertices)
     
     # Build feature hierarchy
@@ -54,7 +51,7 @@ def main():
     
     # Create color scheme
     num_features = max(len(sketch_planes), len(extrudes['extrudes']), 40)
-    colors = create_color_scheme(num_features)
+    colors = create_color_scheme(num_features)"""
     
     # Main rendering loop
     running = False
@@ -80,12 +77,12 @@ def main():
         screen.fill((0, 0, 0))
         
         # Render geometry and features
-        render_feature_tree(screen, feature_tree, colors, font)
-        render_stl(screen, vertices, triangles, scale, right_offset, rotation_matrix)
-        render_sketch_planes(screen, vertices, sketches, scale, left_offset, rotation_matrix, colors)
-        render_edges(screen, vertices, edges, scale, left_offset, rotation_matrix)
+        #render_feature_tree(screen, feature_tree, colors, font)
+        #render_stl(screen, vertices, triangles, scale, right_offset, rotation_matrix)
+        #render_sketch_planes(screen, vertices, sketches, scale, left_offset, rotation_matrix, colors)
+        #render_edges(screen, vertices, edges, scale, left_offset, rotation_matrix)
         #render_extrudes(screen, extrudes, sketches, scale, left_offset, rotation_matrix, colors)
-        render_sketches(screen, sketches, colors, font)
+        #render_sketches(screen, sketches, colors, font)
         
         pygame.display.flip()
         clock.tick(60)
@@ -94,3 +91,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    print("thanks!")
