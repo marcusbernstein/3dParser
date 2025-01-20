@@ -172,6 +172,204 @@ def merge_coplanar_triangles(vertices, triangles, normal_tolerance):
     
     return merged_groups
 
+def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.01, area_tolerance=0.01, normal_tolerance=0.001, max_angle=np.pi/12):
+    print(f"\nStarting cylindrical face detection with parameters:")
+    print(f"angle_tolerance: {angle_tolerance:.4f} radians ({np.degrees(angle_tolerance):.2f}°)")
+    print(f"area_tolerance: {area_tolerance:.4f}")
+    print(f"normal_tolerance: {normal_tolerance:.4f}")
+    print(f"max_angle: {max_angle:.4f} radians ({np.degrees(max_angle):.2f}°)")
+    
+    merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance)
+    print(f"\nFound {len(merged_groups)} initial coplanar groups")
+    
+    def calculate_triangle_area(v1_idx, v2_idx, v3_idx):
+        v1 = np.array(vertices[v1_idx])
+        v2 = np.array(vertices[v2_idx])
+        v3 = np.array(vertices[v3_idx])
+        return 0.5 * np.linalg.norm(np.cross(v2 - v1, v3 - v1))
+    
+    def calculate_angle_between_faces(normal1, normal2):
+        n1 = np.array(normal1)
+        n2 = np.array(normal2)
+        cos_angle = np.clip(np.dot(n1, n2), -1.0, 1.0)
+        return np.arccos(cos_angle)
+    
+    def calculate_triangle_area(v1_idx, v2_idx, v3_idx):
+        v1 = np.array(vertices[v1_idx])
+        v2 = np.array(vertices[v2_idx])
+        v3 = np.array(vertices[v3_idx])
+        return 0.5 * np.linalg.norm(np.cross(v2 - v1, v3 - v1))
+    
+    def calculate_angle_between_faces(normal1, normal2):
+        n1 = np.array(normal1)
+        n2 = np.array(normal2)
+        cos_angle = np.clip(np.dot(n1, n2), -1.0, 1.0)
+        return np.arccos(cos_angle)
+    
+    def are_groups_adjacent(group1_indices, group2_indices):
+        for idx1 in group1_indices:
+            verts1 = set([triangles[idx1][0], triangles[idx1][1], triangles[idx1][2]])
+            for idx2 in group2_indices:
+                verts2 = set([triangles[idx2][0], triangles[idx2][1], triangles[idx2][2]])
+                if len(verts1.intersection(verts2)) >= 2:
+                    return True
+        return False
+    
+    # Calculate areas and normals for merged groups
+    merged_faces = []
+    for i, group in enumerate(merged_groups):
+        total_area = sum(calculate_triangle_area(
+            triangles[idx][0], 
+            triangles[idx][1], 
+            triangles[idx][2]
+        ) for idx in group)
+        normal = triangles[group[0]][3]
+        merged_faces.append((group, total_area, normal))
+        print(f"\nGroup {i}: {len(group)} triangles, area: {total_area:.4f}")
+    
+    # Group by area pattern
+    area_groups = defaultdict(list)
+    for i, (group, area, normal) in enumerate(merged_faces):
+        rounded_area = round(area / area_tolerance) * area_tolerance
+        area_groups[rounded_area].append((i, group, normal))
+        print(f"Face {i} with area {area:.4f} grouped into bucket {rounded_area:.4f}")
+    
+    print(f"\nFound {len(area_groups)} distinct area groups")
+    for area, group_list in area_groups.items():
+        print(f"Area {area:.4f}: {len(group_list)} faces")
+    
+    cylindrical_faces = []
+    processed = set()
+    
+    for area, group_list in area_groups.items():
+        if len(group_list) < 3:
+            print(f"\nSkipping area group {area:.4f} - insufficient faces ({len(group_list)} < 3)")
+            continue
+            
+        print(f"\nProcessing area group {area:.4f} with {len(group_list)} faces")
+        
+        # Build adjacency graph
+        adj_graph = defaultdict(list)
+        angle_patterns = defaultdict(int)
+        
+        for i, (idx1, group1, normal1) in enumerate(group_list):
+            if idx1 in processed:
+                continue
+                
+            for j, (idx2, group2, normal2) in enumerate(group_list[i+1:], i+1):
+                if idx2 in processed:
+                    continue
+                    
+                if are_groups_adjacent(group1, group2):
+                    angle = calculate_angle_between_faces(normal1, normal2)
+                    print(f"Faces {idx1}-{idx2}: angle {np.degrees(angle):.2f}°")
+                    
+                    if angle > max_angle:
+                        print(f"Skipping faces {idx1}-{idx2}: angle {np.degrees(angle):.2f}° > max {np.degrees(max_angle):.2f}°")
+                        continue
+                        
+                    rounded_angle = round(angle / angle_tolerance) * angle_tolerance
+                    angle_patterns[rounded_angle] += 1
+                    adj_graph[idx1].append((idx2, angle))
+                    adj_graph[idx2].append((idx1, angle))
+        
+        if not angle_patterns:
+            print("No valid angle patterns found in this area group")
+            continue
+            
+        dominant_angle = max(angle_patterns.items(), key=lambda x: x[1])[0]
+        print(f"Dominant angle pattern: {np.degrees(dominant_angle):.2f}° (frequency: {angle_patterns[dominant_angle]})")
+        
+        # Find connected components
+        visited = set()
+        for start_idx, start_group, _ in group_list:
+            if start_idx in visited or start_idx in processed:
+                continue
+                
+            print(f"\nStarting new component from face {start_idx}")
+            component = []
+            angles = []
+            queue = [(start_idx, None)]
+            
+            while queue:
+                current_idx, prev_angle = queue.pop(0)
+                if current_idx in visited:
+                    continue
+                
+                visited.add(current_idx)
+                component.append(current_idx)
+                
+                if prev_angle is not None:
+                    angles.append(prev_angle)
+                    print(f"Added angle {np.degrees(prev_angle):.2f}° to component")
+                
+                for neighbor_idx, angle in adj_graph[current_idx]:
+                    if neighbor_idx not in visited:
+                        rounded_angle = round(angle / angle_tolerance) * angle_tolerance
+                        if abs(rounded_angle - dominant_angle) < angle_tolerance:
+                            queue.append((neighbor_idx, angle))
+            
+            if len(component) >= 3:
+                print(f"\nFound component with {len(component)} faces")
+                all_triangles = []
+                for comp_idx in component:
+                    all_triangles.extend(merged_faces[comp_idx][0])
+                
+                total_angle = sum(angles)
+                print(f"Total angle sweep: {np.degrees(total_angle):.2f}°")
+                
+                if len(angles) >= 2:
+                    angle_diffs = np.diff(sorted(angles))
+                    if all(abs(angle_diffs) < .5):
+                        angle_ratio = max(angle_diffs) / min(angle_diffs)
+                        print(f"Angle spacing ratio: {angle_ratio:.4f}")
+                        consistent_spacing = True
+                    else:
+                        consistent_spacing = True
+                        print("Zero angle differences found - treating as consistent")
+                else:
+                    consistent_spacing = True
+                    print("Too few angles to check spacing consistency")
+                
+                if consistent_spacing:
+                    print("Angles are consistently spaced")
+                    if abs(total_angle - 2 * np.pi) < angle_tolerance * len(angles):
+                        print("Complete cylinder detected (2π angle sweep)")
+                        # Verify physical connectivity
+                        connected = True
+                        for i in range(len(component)):
+                            if not are_groups_adjacent(merged_faces[component[i]][0], 
+                                                     merged_faces[component[(i+1)%len(component)]][0]):
+                                connected = False
+                                print(f"Connectivity break detected between faces {component[i]} and {component[(i+1)%len(component)]}")
+                                break
+                        
+                        if connected:
+                            print("Adding complete cylinder")
+                            cylindrical_faces.append(("complete_cylinder", all_triangles))
+                        else:
+                            print("Adding as partial cylinder due to connectivity break")
+                            cylindrical_faces.append(("partial_cylinder", all_triangles))
+                    else:
+                        print(f"Adding partial cylinder (angle sweep != 2π)")
+                        cylindrical_faces.append(("partial_cylinder", all_triangles))
+                else:
+                    print("Rejecting component due to inconsistent angle spacing")
+                
+                processed.update(component)
+    
+    print(f"\nFinal detection results: {len(cylindrical_faces)} cylindrical features")
+    result = []
+    for i, (type_name, face_indices) in enumerate(cylindrical_faces):
+        diameter, center, axis = calculate_cylinder_properties(vertices, face_indices, triangles)
+        print(f"\nCylinder {i} ({type_name}):")
+        print(f"  Diameter: {diameter:.4f}")
+        print(f"  Center: ({center[0]:.4f}, {center[1]:.4f}, {center[2]:.4f})")
+        print(f"  Axis: ({axis[0]:.4f}, {axis[1]:.4f}, {axis[2]:.4f})")
+        result.append((type_name, face_indices, diameter, center, axis))
+    
+    return result
+
 def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.1, area_tolerance=0.1, normal_tolerance=0.01, max_angle=np.pi/12):
     print(f"\nStarting cylindrical face detection with parameters:")
     print(f"angle_tolerance: {angle_tolerance:.4f} radians ({np.degrees(angle_tolerance):.2f}°)")
@@ -778,6 +976,8 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 diameter /= 2
                 
                 boundary_edges = find_boundary_edges(face_indices, triangles, edges)
+                print("Length Boundary Edges!")
+                print(boundary_edges)
                 if len(boundary_edges) < 2:
                     print("Insufficient boundary edges found")
                     continue
@@ -941,50 +1141,38 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
     current_id += 1
     
     return "\n".join(entities), current_id, mappings, closed_shell_id
+
 def find_boundary_edges(face_indices, triangles, edges):
-    # Create edge lookup for O(1) access
-    edge_set = {tuple(sorted((v1, v2))) for v1, v2 in edges}
-    
-    # Find edges that appear once in cylindrical faces
+    """Find the two boundary edges of a partial cylinder that are parallel to its axis."""
     edge_count = defaultdict(int)
-    edge_to_tri = defaultdict(list)
     
+    # Count edge occurrences in cylindrical faces
     for idx in face_indices:
         v1, v2, v3, _ = triangles[idx]
         for edge in [(v1, v2), (v2, v3), (v3, v1)]:
             edge = tuple(sorted(edge))
-            if edge in edge_set:  # Only count edges that exist in input
-                edge_count[edge] += 1
-                edge_to_tri[edge].append(idx)
+            edge_count[edge] += 1
     
-    # Return edges that appear once and exist in input edges
+    # Get edges that appear once (boundary edges)
     return [edge for edge, count in edge_count.items() if count == 1]
 
 def calculate_cylinder_angles(boundary_edges, vertices, center, axis):
-    # Project boundary vertices onto plane perpendicular to axis
+    """Calculate start and end angles of partial cylinder from boundary edges."""
     axis_np = np.array(axis)
     center_np = np.array(center)
     
-    # Get reference vector from first edge
-    ref_point = np.array(vertices[boundary_edges[0][0]])
-    ref_vec = ref_point - center_np
-    ref_vec = ref_vec - np.dot(ref_vec, axis_np) * axis_np
-    ref_vec = ref_vec / np.linalg.norm(ref_vec)
-    
+    # Project boundary vertices onto plane perpendicular to axis
     angles = []
     for v1, v2 in boundary_edges:
-        point = np.array(vertices[v1])
-        vec = point - center_np
-        vec = vec - np.dot(vec, axis_np) * axis_np
-        vec = vec / np.linalg.norm(vec)
-        
-        angle = np.arctan2(
-            np.dot(np.cross(ref_vec, vec), axis_np),
-            np.dot(ref_vec, vec)
-        )
-        angles.append(angle)
+        point = np.array(vertices[v1]) - center_np
+        proj = point - np.dot(point, axis_np) * axis_np
+        if np.linalg.norm(proj) > 1e-10:
+            proj = proj / np.linalg.norm(proj)
+            angle = np.arctan2(proj[1], proj[0])
+            angles.append(angle)
     
     return min(angles), max(angles)
+
 def find_index(arr_list, target_array):
     for idx, arr in enumerate(arr_list):
         if np.array_equal(arr, target_array):
