@@ -153,6 +153,7 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
 def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_tolerance=0.05, normal_tolerance=0.001, max_angle=np.pi/12):
     # First merge coplanar triangles
     merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance)
+    
     def calculate_triangle_area(v1_idx, v2_idx, v3_idx):
         v1 = np.array(vertices[v1_idx])
         v2 = np.array(vertices[v2_idx])
@@ -167,39 +168,39 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
             triangles[idx][1], 
             triangles[idx][2]
         ) for idx in group)
-        # Use normal from first triangle in group (they're all the same)
         normal = triangles[group[0]][3]
         merged_faces.append((group, total_area, normal))
 
-
-    def calculate_angle_between_faces(normal1, normal2):
-        n1 = np.array(normal1)
-        n2 = np.array(normal2)
-        cos_angle = np.clip(np.dot(n1, n2), -1.0, 1.0)
-        return np.arccos(cos_angle)
-
-    def are_groups_adjacent(group1_indices, group2_indices):
-        # Check if any triangle in group1 shares edges with any triangle in group2
-        for idx1 in group1_indices:
-            verts1 = set([triangles[idx1][0], triangles[idx1][1], triangles[idx1][2]])
-            for idx2 in group2_indices:
-                verts2 = set([triangles[idx2][0], triangles[idx2][1], triangles[idx2][2]])
-                if len(verts1.intersection(verts2)) >= 2:
-                    return True
-        return False
-
-    # Group merged faces by area
+    # Group merged faces by area with tolerance
     area_groups = defaultdict(list)
     for i, (group, area, normal) in enumerate(merged_faces):
         rounded_area = round(area / area_tolerance) * area_tolerance
         area_groups[rounded_area].append((i, group, normal))
 
-    # Find cylindrical components
+    # Handle split faces
+    small_groups = {area: faces for area, faces in area_groups.items() 
+                   if len(faces) < 3}
+    
+    for small_area, small_faces in small_groups.items():
+        double_area = small_area * 2
+        if double_area in area_groups and len(area_groups[double_area]) >= 3:
+            # Check if faces are adjacent and have consistent normals
+            for small_idx, small_group, small_normal in small_faces:
+                for large_idx, large_group, large_normal in area_groups[double_area]:
+                    if are_groups_adjacent(small_group, large_group, triangles):
+                        angle = calculate_angle_between_faces(small_normal, large_normal)
+                        if angle < max_angle:
+                            # Move to larger group and adjust area
+                            area_groups[double_area].append((small_idx, small_group, small_normal))
+                            area_groups[small_area].remove((small_idx, small_group, small_normal))
+
+    # Rest of the function remains the same...
+    # (Process area groups to find cylindrical components)
     cylindrical_faces = []
     processed = set()
 
     for area, group_list in area_groups.items():
-        if len(group_list) < 3:  # Need at least 3 faces for a partial cylinder
+        if len(group_list) < 3:
             continue
         
         # Build adjacency graph for merged faces
@@ -212,23 +213,21 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                 if idx2 in processed:
                     continue
                 
-                if are_groups_adjacent(group1, group2):
+                if are_groups_adjacent(group1, group2, triangles):
                     angle = calculate_angle_between_faces(normal1, normal2)
                     if angle > max_angle:
                         continue
                     adj_graph[idx1].append((idx2, angle))
                     adj_graph[idx2].append((idx1, angle))
-                    adj_graph[idx1].append((idx2, calculate_angle_between_faces(normal1, normal2)))
-                    adj_graph[idx2].append((idx1, calculate_angle_between_faces(normal2, normal1)))
         
-        # Find connected components with consistent angles
+        # Continue with existing component finding logic...
         visited = set()
         for start_idx, start_group, _ in group_list:
             if start_idx in visited or start_idx in processed:
                 continue
             
             component = []
-            queue = [(start_idx, None)]  # (idx, expected_angle)
+            queue = [(start_idx, None)]
             
             while queue:
                 current_idx, expected_angle = queue.pop(0)
@@ -240,9 +239,8 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                 
                 for neighbor_idx, angle in adj_graph[current_idx]:
                     if neighbor_idx not in visited:
-                        if expected_angle is None or (abs(angle - expected_angle) < angle_tolerance and abs(angle) < 10):
+                        if expected_angle is None or abs(angle - expected_angle) < angle_tolerance:
                             queue.append((neighbor_idx, angle))
-            
             if len(component) >= 3:
                 # Get all triangle indices in the component
                 all_triangles = []
@@ -251,37 +249,42 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                 
                 # Calculate total angle sweep
                 normals = [merged_faces[idx][2] for idx in component]
-                total_angle = 0
-                min_angle = float('inf')
-                start_normal = normals[0]
+                total_angle = sum(calculate_angle_between_faces(normals[i], normals[i+1])
+                                for i in range(len(normals)-1))
+                total_angle += calculate_angle_between_faces(normals[-1], normals[0])
+                
+            if len(component) >= 3:
+                # Process component as before...
+                all_triangles = []
+                for comp_idx in component:
+                    group_info = next(g for i, g, _ in group_list if i == comp_idx)
+                    all_triangles.extend(group_info)
+                diameter, center, axis = calculate_cylinder_properties(vertices, all_triangles, triangles)
 
-                for i in range(len(normals)):
-                    n1 = normals[i]
-                    n2 = normals[(i + 1) % len(normals)]
-                    angle = np.arccos(np.clip(np.dot(n1, n2), -1.0, 1.0))
-                    min_angle = min(min_angle, angle)
-                    total_angle += angle
-
-                # Check angle back to start
-                end_angle = np.arccos(np.clip(np.dot(normals[-1], start_normal), -1.0, 1.0))
-                total_angle += end_angle
-
-                if abs(total_angle - (2 * np.pi)) < angle_tolerance:
-                    cylindrical_faces.append(("complete_cylinder", all_triangles))
+                if abs(total_angle - 2 * np.pi) < angle_tolerance:
+                    cylindrical_faces.append(("complete_cylinder", all_triangles, diameter, center, axis))
                     print("complete cylinder")
                     print(total_angle)
                 else:
-                    cylindrical_faces.append(("partial_cylinder", all_triangles))
-                    print("partial cylinder")
-                
-                processed.update(component)
+                    cylindrical_faces.append(("partial_cylinder", all_triangles, diameter, center, axis))
+                    processed.update(component)
+    return cylindrical_faces
 
-    result = []
-    for type_name, face_indices in cylindrical_faces:
-        diameter, center, axis = calculate_cylinder_properties(vertices, face_indices, triangles)
-        result.append((type_name, face_indices, diameter, center, axis))
+def are_groups_adjacent(group1, group2, triangles):
+    for idx1 in group1:
+        verts1 = set([triangles[idx1][0], triangles[idx1][1], triangles[idx1][2]])
+        for idx2 in group2:
+            verts2 = set([triangles[idx2][0], triangles[idx2][1], triangles[idx2][2]])
+            if len(verts1.intersection(verts2)) >= 2:
+                return True
+    return False
 
-    return result
+def calculate_angle_between_faces(normal1, normal2):
+    n1 = np.array(normal1)
+    n2 = np.array(normal2)
+    cos_angle = np.clip(np.dot(n1, n2), -1.0, 1.0)
+    return np.arccos(cos_angle)
+
 
 def find_cylinder_boundaries(vertices, triangles, face_indices, axis, center):
     boundary_edges = set()
@@ -384,6 +387,7 @@ def generate_partial_cylinder(vertices, triangles, face_indices, diameter, cente
 def generate_step_entities(vertices, edges, triangles, start_id=100):
     entities = []
     current_id = start_id
+    all_face_ids = []  # Track all face IDs directly
         
     # Tracking dictionaries for entity references
     mappings = {
@@ -398,7 +402,6 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         'face_bounds': {},      # triangle_idx -> id
         'axis_placements': {},  # triangle_idx -> id
         'planes': {},           # triangle_idx -> id
-        'faces': {}            # triangle_idx -> id
     }
     
     cylindrical_mappings = {
@@ -412,10 +415,11 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         'face_bounds': {},      # (loop) -> id
         'cylindrical_surfaces': {}, # (placement,diameter) -> id
         'faces': {}            # surface_idx -> id
+
     }
     
+    # First detect cylindrical faces
     enable_curved_surfaces = True
-    # Detect cylindrical faces if enabled
     cylinder_faces = []
     excluded_triangles = set()
     if enable_curved_surfaces:
@@ -424,137 +428,142 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         for _, face_indices, _, _, _ in cylinder_faces:
             excluded_triangles.update(face_indices)
     
-    # Generate planar geometry entities (excluding cylindrical triangles)
+    # Generate base CARTESIAN_POINTs for all vertices
     for i, (x, y, z) in enumerate(vertices):
         entities.append(f"#{current_id}=CARTESIAN_POINT('',({x:.6f},{y:.6f},{z:.6f})); /* vertex {i} */")
         mappings['cartesian_points'][i] = current_id
         current_id += 1
     
-    # 2. Vertex Points
+    # Generate VERTEX_POINTs
     for i in range(len(vertices)):
         entities.append(f"#{current_id}=VERTEX_POINT('',#{mappings['cartesian_points'][i]}); /* vertex point {i} */")
         mappings['vertex_points'][i] = current_id
         current_id += 1
     
-    # 3. Edge Directions and Vectors
-    for i, (v1, v2) in enumerate(edges):  # Make sure this loops through ALL edges
+    # Generate edge geometry for all edges
+    for i, (v1, v2) in enumerate(edges):
         # Calculate direction vector
         p1 = np.array(vertices[v1])
         p2 = np.array(vertices[v2])
         direction = p2 - p1
         direction = direction / np.linalg.norm(direction)
         direction_tuple = tuple(direction)
-    
+        
         # Create or reuse direction
         if direction_tuple not in mappings['directions']:
-            entities.append(f"#{current_id}=DIRECTION('',({direction[0]:.6f},{direction[1]:.6f},{direction[2]:.6f})); /* edge {i} direction */")
+            entities.append(f"#{current_id}=DIRECTION('',({direction[0]:.6f},{direction[1]:.6f},{direction[2]:.6f}));")
             mappings['directions'][direction_tuple] = current_id
             current_id += 1
-    
+        
         # Create vector
-        entities.append(f"#{current_id}=VECTOR('',#{mappings['directions'][direction_tuple]},1.0); /* edge {i} vector */")
+        entities.append(f"#{current_id}=VECTOR('',#{mappings['directions'][direction_tuple]},1.0);")
         mappings['vectors'][i] = current_id
         current_id += 1
-
-    # 4. Lines (CARTESIAN_POINT, VECTOR)
-    for i, (v1, v2) in enumerate(edges):  # This should process ALL edges
-        entities.append(f"#{current_id}=LINE('',#{mappings['cartesian_points'][v1]},#{mappings['vectors'][i]}); /* edge {i} line */")
+        
+        # Create line
+        entities.append(f"#{current_id}=LINE('',#{mappings['cartesian_points'][v1]},#{mappings['vectors'][i]});")
         mappings['lines'][i] = current_id
         current_id += 1
-
-    # 5. Edge Curves (VERTEX, VERTEX, LINE)
-    for i, (v1, v2) in enumerate(edges):  # This should process ALL edges
-        entities.append(f"#{current_id}=EDGE_CURVE('',#{mappings['vertex_points'][v1]},#{mappings['vertex_points'][v2]},#{mappings['lines'][i]},.T.); /* edge {i} curve */")
+        
+        # Create edge curve
+        entities.append(f"#{current_id}=EDGE_CURVE('',#{mappings['vertex_points'][v1]},#{mappings['vertex_points'][v2]},#{mappings['lines'][i]},.T.);")
         mappings['edge_curves'][i] = current_id
         current_id += 1
-    print(f"Created edge curves: {len(mappings['edge_curves'])}")
-    print(f"Total edges: {len(edges)}")
-    assert len(mappings['edge_curves']) == len(edges), "Not all edges have corresponding curves!"
-    
-    # 6. Oriented Edges (EDGE_CURVE)
-    edge_lookup = {}
-    for i, (v1, v2) in enumerate(edges):
-        edge_lookup[(v1, v2)] = i
-        edge_lookup[(v2, v1)] = i  # Add reverse direction since edge direction doesn't matter
 
-    for i, (v1, v2, v3, normal) in enumerate(triangles):
-        if i not in excluded_triangles:  # Only create if not part of cylinder
-            # Get edge indices directly from lookup
-            edge1 = edge_lookup[(v1, v2)] if (v1, v2) in edge_lookup else edge_lookup[(v2, v1)]
-            edge2 = edge_lookup[(v2, v3)] if (v2, v3) in edge_lookup else edge_lookup[(v3, v2)]
-            edge3 = edge_lookup[(v3, v1)] if (v3, v1) in edge_lookup else edge_lookup[(v1, v3)]
-    
-        # Create oriented edges
-        for edge_idx in (edge1, edge2, edge3):
-            key = (i, edge_idx)
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{mappings['edge_curves'][edge_idx]},.T.); /* triangle {i} oriented edge */")
-            mappings['oriented_edges'][key] = current_id
-            current_id += 1
-    # 7. Edge Loops (ORIENTED_EDGES)
-    for i, (v1, v2, v3, normal) in enumerate(triangles):
-        if i not in excluded_triangles:  # Only create if not part of cylinder
-            edge1 = edge_lookup.get((v1, v2)) or edge_lookup.get((v2, v1))
-            edge2 = edge_lookup.get((v2, v3)) or edge_lookup.get((v3, v2))
-            edge3 = edge_lookup.get((v3, v1)) or edge_lookup.get((v1, v3))
-        
-            entities.append(f"#{current_id}=EDGE_LOOP('',(#{mappings['oriented_edges'][(i,edge1)]},#{mappings['oriented_edges'][(i,edge2)]},#{mappings['oriented_edges'][(i,edge3)]})); /* triangle {i} loop */")
-            mappings['edge_loops'][i] = current_id
-            current_id += 1
-    
-    # 8. Face Bounds (EDGE_LOOPS)
-    for i in range(len(triangles)):
-        if i not in excluded_triangles:  # Only create if not part of cylinder
-            entities.append(f"#{current_id}=FACE_BOUND('',#{mappings['edge_loops'][i]},.T.); /* triangle {i} bound */")
-            mappings['face_bounds'][i] = current_id
-            current_id += 1
-    
-    # 9. Triangle Normal Directions and Axis Placements
-    for i, (v1, v2, v3, normal) in enumerate(triangles):
-        if i not in excluded_triangles:  # Only create if not part of cylinder
+    # Use merged groups for planar faces
+    merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.001)
 
-            # Get perpendicular vectors
-            perp1, perp2 = get_perpendicular_vectors(normal)
+    # Process merged planar faces
+    for group_idx, group_triangles in enumerate(merged_groups):
+        # Skip if all triangles in group are part of cylinder
+        if all(idx in excluded_triangles for idx in group_triangles):
+            continue
+            
+        # Get sample triangle for normal and placement
+        sample_tri = triangles[group_triangles[0]]
+        v1, v2, v3, normal = sample_tri
         
-            # Add normal direction
-            entities.append(f"#{current_id}=DIRECTION('',({normal[0]:.6f},{normal[1]:.6f},{normal[2]:.6f})); /* triangle {i} normal */")
-            normal_id = current_id
+        # Get face boundaries
+        outer_loop, inner_loops = get_face_boundaries(vertices, triangles, group_triangles, edges)
+        
+        # Create normal direction and reference direction
+        normal_tuple = tuple(normal)
+        if normal_tuple not in mappings['directions']:
+            entities.append(f"#{current_id}=DIRECTION('',({normal[0]:.6f},{normal[1]:.6f},{normal[2]:.6f}));")
+            mappings['directions'][normal_tuple] = current_id
+            current_id += 1
+        normal_dir_id = mappings['directions'][normal_tuple]  # Get ID regardless of whether it was just created
+            
+        perp1, _ = get_perpendicular_vectors(normal)
+        perp_tuple = tuple(perp1)
+        if perp_tuple not in mappings['directions']:
+            entities.append(f"#{current_id}=DIRECTION('',({perp1[0]:.6f},{perp1[1]:.6f},{perp1[2]:.6f}));")
+            mappings['directions'][perp_tuple] = current_id
+            current_id += 1
+        ref_dir_id = mappings['directions'][perp_tuple]  # Get ID regardless of whether it was just created
+            
+        # Create axis placement
+        entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{mappings['cartesian_points'][v1]},#{normal_dir_id},#{ref_dir_id});")
+        axis_placement_id = current_id
+        current_id += 1
+        
+        # Create plane
+        entities.append(f"#{current_id}=PLANE('',#{axis_placement_id});")
+        plane_id = current_id
+        current_id += 1
+        
+        # Process outer loop edges
+        edge_lookup = {tuple(sorted([v1, v2])): i for i, (v1, v2) in enumerate(edges)}
+        outer_oriented_edges = []
+        for edge in outer_loop:
+            sorted_edge = tuple(sorted(edge))
+            edge_idx = edge_lookup[sorted_edge]
+            orientation = '.T.' if edge == sorted_edge else '.F.'
+            
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{mappings['edge_curves'][edge_idx]},{orientation});")
+            outer_oriented_edges.append(current_id)
             current_id += 1
         
-            # Add perpendicular direction 
-            entities.append(f"#{current_id}=DIRECTION('',({perp1[0]:.6f},{perp1[1]:.6f},{perp1[2]:.6f})); /* triangle {i} reference direction */")
-            perp_id = current_id
+        # Create outer edge loop and face bound
+        entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in outer_oriented_edges)}));")
+        outer_loop_id = current_id
+        current_id += 1
+        
+        entities.append(f"#{current_id}=FACE_BOUND('',#{outer_loop_id},.T.);")
+        outer_bound_id = current_id
+        current_id += 1
+        
+        # Process inner loops
+        inner_bound_ids = []
+        for inner_loop in inner_loops:
+            inner_oriented_edges = []
+            for edge in inner_loop:
+                sorted_edge = tuple(sorted(edge))
+                edge_idx = edge_lookup[sorted_edge]
+                orientation = '.T.' if edge == sorted_edge else '.F.'
+                
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{mappings['edge_curves'][edge_idx]},{orientation});")
+                inner_oriented_edges.append(current_id)
+                current_id += 1
+            
+            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in inner_oriented_edges)}));")
+            inner_loop_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=FACE_BOUND('',#{inner_loop_id},.F.);")
+            inner_bound_ids.append(current_id)
             current_id += 1
         
-            # Create axis placement (DIRECTION, DIRECTION)
-            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{mappings['cartesian_points'][v1]},#{normal_id},#{perp_id}); /* triangle {i} axis */")
-            mappings['axis_placements'][i] = current_id
-            current_id += 1
-    
-    # 10. Planes (AXIS2_PLACEMENT_3D)
-    for i in range(len(triangles)):
-        if i not in excluded_triangles:  # Only create if not part of cylinder
+        # Create advanced face with all bounds
+        bound_list = f"#{outer_bound_id}"
+        if inner_bound_ids:
+            bound_list += "," + ",".join(f"#{id}" for id in inner_bound_ids)
+        entities.append(f"#{current_id}=ADVANCED_FACE('',({bound_list}),#{plane_id},.T.);")
+        all_face_ids.append(current_id)  # Add face ID directly to our list
+        current_id += 1
 
-            entities.append(f"#{current_id}=PLANE('',#{mappings['axis_placements'][i]}); /* triangle {i} plane */")
-            mappings['planes'][i] = current_id
-            current_id += 1
-    
-    # 11. Advanced Faces (FACE_BOUNDS, PLANES)
-    for i in range(len(triangles)):
-        if i not in excluded_triangles:  # Only create if not part of cylinder
-            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{mappings['face_bounds'][i]}),#{mappings['planes'][i]},.T.); /* triangle {i} face */")
-            mappings['faces'][i] = current_id
-            current_id += 1
-    
-    # 12. Closed Shell (ADVANCED_FACES)
-    '''face_list = ",".join([f"#{mappings['faces'][i]}" for i in range(len(triangles))])
-    entities.append(f"#{current_id}=CLOSED_SHELL('',({face_list})); /* complete shell */")
-    closed_shell_id = current_id
-    current_id += 1 '''
-    
-    # END RECTILINEAR
-    
+    # Process cylindrical faces (existing code)
     if enable_curved_surfaces:
-        # Process each detected cylindrical face
         for cyl_idx, (type_name, face_indices, diameter, center, axis) in enumerate(cylinder_faces):
             center_np = np.array(center)
             axis_np = np.array(axis)
@@ -717,10 +726,14 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 # 12. Create ADVANCED_FACE (like #128 in example)
                 entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
                 cylindrical_mappings['faces'][cyl_idx] = current_id
+                all_face_ids.append(current_id)
                 current_id += 1
+
+
                 pass
                 
             else:  # "partial_cylinder"
+                print("partial cylinder ID")
                # Calculate boundary points
                 start_bottom, end_bottom, start_top, end_top = generate_partial_cylinder(
                    vertices, triangles, face_indices, diameter, center, axis
@@ -862,21 +875,90 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 # 12. ADVANCED_FACE
                 entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
                 cylindrical_mappings['faces'][cyl_idx] = current_id
+                all_face_ids.append(current_id)
                 current_id += 1
-    
-    # Combine all faces for closed shell
-    all_face_ids = []
-    all_face_ids.extend([f"#{mappings['faces'][i]}" for i in range(len(triangles)) if i not in excluded_triangles])
-    if enable_curved_surfaces:
-        all_face_ids.extend([f"#{cylindrical_mappings['faces'][i]}" for i in range(len(cylinder_faces))])
-    
-    # Create closed shell with all faces
-    face_list = ",".join(all_face_ids)
+
+    face_list = ",".join(f"#{id}" for id in all_face_ids)
     entities.append(f"#{current_id}=CLOSED_SHELL('',({face_list})); /* complete shell */")
     closed_shell_id = current_id
     current_id += 1
     
     return "\n".join(entities), current_id, mappings, closed_shell_id
+
+def get_face_boundaries(vertices, triangles, group_indices, edges):
+    """Get outer and inner loops for a merged face group"""
+    # Create edge lookup for faster reference
+    edge_lookup = {tuple(sorted([v1, v2])): i for i, (v1, v2) in enumerate(edges)}
+    
+    # First collect all edges from the face group
+    boundary_edges = defaultdict(int)
+    edge_vertices = {}  # Keep track of actual vertices for each edge
+    
+    for tri_idx in group_indices:
+        v1, v2, v3, _ = triangles[tri_idx]
+        for edge in [(v1, v2), (v2, v3), (v3, v1)]:
+            sorted_edge = tuple(sorted(edge))
+            if sorted_edge in edge_lookup:  # Only process valid edges
+                boundary_edges[sorted_edge] += 1
+                edge_vertices[sorted_edge] = edge  # Store original orientation
+    
+    # Edges appearing once are boundary edges
+    boundary = [edge_vertices[edge] for edge, count in boundary_edges.items() 
+               if count == 1 and edge in edge_vertices]
+    
+    if not boundary:
+        return [], []  # Return empty lists if no boundary found
+        
+    # Order edges into continuous loops
+    loops = []
+    remaining = boundary.copy()
+    
+    while remaining:
+        current_loop = []
+        start_edge = remaining.pop(0)
+        current_loop.append(start_edge)
+        current_vertex = start_edge[1]
+        
+        while current_vertex != start_edge[0] and remaining:  # Added remaining check
+            found_next = False
+            for i, edge in enumerate(remaining):
+                if edge[0] == current_vertex:
+                    current_vertex = edge[1]
+                    current_loop.append(edge)
+                    remaining.pop(i)
+                    found_next = True
+                    break
+                elif edge[1] == current_vertex:
+                    current_vertex = edge[0]
+                    current_loop.append((edge[1], edge[0]))
+                    remaining.pop(i)
+                    found_next = True
+                    break
+            if not found_next:
+                break  # Break if we can't find the next edge
+        
+        if len(current_loop) > 2:  # Only add loops with at least 3 edges
+            loops.append(current_loop)
+    
+    if not loops:
+        return [], []
+    
+    # Helper function to calculate loop length    
+    def calculate_loop_length(loop):
+        total_length = 0
+        for e in loop:
+            if e[0] >= len(vertices) or e[1] >= len(vertices):  # Validate indices
+                continue
+            v1_coords = np.array(vertices[e[0]])
+            v2_coords = np.array(vertices[e[1]])
+            total_length += np.linalg.norm(v2_coords - v1_coords)
+        return total_length
+    
+    # Find outer loop (largest perimeter)
+    outer_loop = max(loops, key=calculate_loop_length)
+    inner_loops = [loop for loop in loops if loop != outer_loop]
+    
+    return outer_loop, inner_loops
 
 def find_index(arr_list, target_array):
     for idx, arr in enumerate(arr_list):
