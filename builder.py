@@ -387,123 +387,642 @@ def generate_partial_cylinder(vertices, triangles, face_indices, diameter, cente
 def generate_step_entities(vertices, edges, triangles, start_id=100):
     entities = []
     current_id = start_id
-    all_face_ids = []  # Track all face IDs directly
-        
-    # Tracking dictionaries for entity references
-    mappings = {
+    all_face_ids = []
+    
+    geometry = {
         'cartesian_points': {},  # vertex_idx -> id
         'vertex_points': {},     # vertex_idx -> id
         'directions': {},        # (dx,dy,dz) -> id
         'vectors': {},          # edge_idx -> id
         'lines': {},            # edge_idx -> id
         'edge_curves': {},      # edge_idx -> id
-        'oriented_edges': {},   # (edge_idx, direction) -> id
-        'edge_loops': {},       # triangle_idx -> id
-        'face_bounds': {},      # triangle_idx -> id
-        'axis_placements': {},  # triangle_idx -> id
-        'planes': {},           # triangle_idx -> id
+        'face_mappings': {
+            'planar_to_cylindrical': {},  # planar_face_id -> cylindrical_face_id
+            'cylindrical_components': {}   # cylindrical_face_id -> [replaced_planar_faces]
+        },
+        'edge_mappings': {
+            'planar': {
+                'axis_start_end': {},      # cyl_id -> {edge_id: oriented_edge_id}
+                'axis_intermediate': {},    # cyl_id -> {edge_id: oriented_edge_id}
+                'circumferential': {},      # cyl_id -> {edge_id: oriented_edge_id}
+            },
+            'cylindrical': {
+                'vertical_edges': {},       # cyl_id -> {start: oriented_edge_id, end: oriented_edge_id}
+                'curved_edges': {},         # cyl_id -> {top: oriented_edge_id, bottom: oriented_edge_id}
+            },
+            'replacements': {
+                'vertical': {},            # planar_edge_id -> cylindrical_edge_id
+                'curved': {}               # list of planar_edge_ids -> cylindrical_edge_id
+            }
+        }
     }
-    
-    cylindrical_mappings = {
-        'cartesian_points': {},  # (x,y,z) -> id
-        'directions': {},        # (dx,dy,dz) -> id
-        'axis_placements': {},   # (center,axis,ref) -> id
-        'circles': {},          # (placement,diameter) -> id
-        'edge_curves': {},      # (circle/line,start,end) -> id
-        'oriented_edges': {},   # (curve,orientation) -> id
-        'edge_loops': {},       # (edges_tuple) -> id
-        'face_bounds': {},      # (loop) -> id
-        'cylindrical_surfaces': {}, # (placement,diameter) -> id
-        'faces': {}            # surface_idx -> id
-
-    }
-    
-    # First detect cylindrical faces
-    enable_curved_surfaces = True
-    cylinder_faces = []
-    excluded_triangles = set()
-    if enable_curved_surfaces:
-        cylinder_faces = detect_cylindrical_faces(vertices, triangles)
-        # Collect all triangle indices that are part of cylindrical surfaces
-        for _, face_indices, _, _, _ in cylinder_faces:
-            excluded_triangles.update(face_indices)
-    
-    # Generate base CARTESIAN_POINTs for all vertices
+    # Generate base points and vertices
     for i, (x, y, z) in enumerate(vertices):
-        entities.append(f"#{current_id}=CARTESIAN_POINT('',({x:.6f},{y:.6f},{z:.6f})); /* vertex {i} */")
-        mappings['cartesian_points'][i] = current_id
+        entities.append(f"#{current_id}=CARTESIAN_POINT('',({x:.6f},{y:.6f},{z:.6f}));")
+        geometry['cartesian_points'][i] = current_id
+        current_id += 1
+        
+        entities.append(f"#{current_id}=VERTEX_POINT('',#{geometry['cartesian_points'][i]});")
+        geometry['vertex_points'][i] = current_id
         current_id += 1
     
-    # Generate VERTEX_POINTs
-    for i in range(len(vertices)):
-        entities.append(f"#{current_id}=VERTEX_POINT('',#{mappings['cartesian_points'][i]}); /* vertex point {i} */")
-        mappings['vertex_points'][i] = current_id
-        current_id += 1
-    
-    # Generate edge geometry for all edges
+    # Generate edge geometry
     for i, (v1, v2) in enumerate(edges):
-        # Calculate direction vector
         p1 = np.array(vertices[v1])
         p2 = np.array(vertices[v2])
         direction = p2 - p1
         direction = direction / np.linalg.norm(direction)
         direction_tuple = tuple(direction)
         
-        # Create or reuse direction
-        if direction_tuple not in mappings['directions']:
+        if direction_tuple not in geometry['directions']:
             entities.append(f"#{current_id}=DIRECTION('',({direction[0]:.6f},{direction[1]:.6f},{direction[2]:.6f}));")
-            mappings['directions'][direction_tuple] = current_id
+            geometry['directions'][direction_tuple] = current_id
             current_id += 1
         
-        # Create vector
-        entities.append(f"#{current_id}=VECTOR('',#{mappings['directions'][direction_tuple]},1.0);")
-        mappings['vectors'][i] = current_id
+        entities.append(f"#{current_id}=VECTOR('',#{geometry['directions'][direction_tuple]},1.0);")
+        geometry['vectors'][i] = current_id
         current_id += 1
         
-        # Create line
-        entities.append(f"#{current_id}=LINE('',#{mappings['cartesian_points'][v1]},#{mappings['vectors'][i]});")
-        mappings['lines'][i] = current_id
+        entities.append(f"#{current_id}=LINE('',#{geometry['cartesian_points'][v1]},#{geometry['vectors'][i]});")
+        geometry['lines'][i] = current_id
         current_id += 1
         
-        # Create edge curve
-        entities.append(f"#{current_id}=EDGE_CURVE('',#{mappings['vertex_points'][v1]},#{mappings['vertex_points'][v2]},#{mappings['lines'][i]},.T.);")
-        mappings['edge_curves'][i] = current_id
+        entities.append(f"#{current_id}=EDGE_CURVE('',#{geometry['vertex_points'][v1]},#{geometry['vertex_points'][v2]},#{geometry['lines'][i]},.T.);")
+        geometry['edge_curves'][i] = current_id
         current_id += 1
 
-    # Use merged groups for planar faces
+        # First detect cylindrical faces and collect their triangles
+    cylinder_faces = detect_cylindrical_faces(vertices, triangles)
+    excluded_triangles = set()
+    cylinder_triangle_map = {}  # triangle_idx -> (cyl_idx, type)
+    
+    for cyl_idx, (type_name, face_indices, diameter, center, axis) in enumerate(cylinder_faces):
+        # Calculate axis direction and reference vectors for later use
+        axis_np = np.array(axis)
+        for tri_idx in face_indices:
+            excluded_triangles.add(tri_idx)
+            cylinder_triangle_map[tri_idx] = (cyl_idx, type_name)
+            
+        # Pre-analyze edges for this cylinder
+        # Collect all edges from triangles in this cylinder
+        cylinder_edges = set()
+        for tri_idx in face_indices:
+            v1, v2, v3, _ = triangles[tri_idx]
+            for edge in [(v1, v2), (v2, v3), (v3, v1)]:
+                cylinder_edges.add(tuple(sorted(edge)))
+                
+        # Classify edges based on their orientation relative to cylinder axis
+        parallel_edges = []
+        perpendicular_edges = []
+        
+        for edge in cylinder_edges:
+            v1, v2 = edge
+            edge_vector = np.array(vertices[v2]) - np.array(vertices[v1])
+            edge_vector = edge_vector / np.linalg.norm(edge_vector)
+            
+            # Check alignment with axis
+            alignment = abs(np.dot(edge_vector, axis_np))
+            if alignment > 0.95:  # Nearly parallel
+                parallel_edges.append(edge)
+            else:  # Perpendicular or angled
+                perpendicular_edges.append(edge)
+        
+        # Store in geometry structure for later use
+        geometry['edge_mappings']['planar']['axis_start_end'][cyl_idx] = {}
+        geometry['edge_mappings']['planar']['axis_intermediate'][cyl_idx] = {}
+        geometry['edge_mappings']['planar']['circumferential'][cyl_idx] = {}
+        
+        # Further analyze parallel edges to identify start/end vs intermediate
+        if type_name == "partial_cylinder":
+            # Calculate angle around axis for each edge
+            edge_angles = []
+            for edge in parallel_edges:
+                v1, v2 = edge
+                p1 = np.array(vertices[v1]) - np.array(center)
+                p1 = p1 - np.dot(p1, axis_np) * axis_np
+                ref_dir = np.array(get_perpendicular_vectors(axis)[0])
+                angle = np.arctan2(np.dot(p1, np.cross(axis_np, ref_dir)), np.dot(p1, ref_dir))
+                if angle < 0:
+                    angle += 2 * np.pi
+                edge_angles.append((angle, edge))
+            
+            # Sort by angle and identify extremes
+            edge_angles.sort()
+            start_angle = edge_angles[0][0]
+            end_angle = edge_angles[-1][0]
+            
+            # Classify parallel edges
+            for angle, edge in edge_angles:
+                if abs(angle - start_angle) < 0.01 or abs(angle - end_angle) < 0.01:
+                    geometry['edge_mappings']['planar']['axis_start_end'][cyl_idx][edge] = None
+                else:
+                    geometry['edge_mappings']['planar']['axis_intermediate'][cyl_idx][edge] = None
+        
+        # Store perpendicular edges
+        for edge in perpendicular_edges:
+            geometry['edge_mappings']['planar']['circumferential'][cyl_idx][edge] = None
+    
     merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.001)
-
-    # Process merged planar faces
+    planar_face_groups = {}  # Maps triangle_idx -> planar_face_id
+    
     for group_idx, group_triangles in enumerate(merged_groups):
-        # Skip if all triangles in group are part of cylinder
+        # Skip if all triangles are part of cylinder
         if all(idx in excluded_triangles for idx in group_triangles):
+            # Map these triangles to their cylinder
+            cyl_idx = cylinder_triangle_map[group_triangles[0]]
+            if cyl_idx not in geometry['face_mappings']['cylindrical_components']:
+                geometry['face_mappings']['cylindrical_components'][cyl_idx] = []
+            geometry['face_mappings']['cylindrical_components'][cyl_idx].extend(group_triangles)
             continue
-            
-        # Get sample triangle for normal and placement
-        sample_tri = triangles[group_triangles[0]]
-        v1, v2, v3, normal = sample_tri
         
-        # Get face boundaries
+        v1, v2, v3, normal = triangles[group_triangles[0]]
         outer_loop, inner_loops = get_face_boundaries(vertices, triangles, group_triangles, edges)
-        
-        # Create normal direction and reference direction
+    
+        # Add after outer_loop, inner_loops = get_face_boundaries(...)
         normal_tuple = tuple(normal)
-        if normal_tuple not in mappings['directions']:
+        if normal_tuple not in geometry['directions']:
             entities.append(f"#{current_id}=DIRECTION('',({normal[0]:.6f},{normal[1]:.6f},{normal[2]:.6f}));")
-            mappings['directions'][normal_tuple] = current_id
+            geometry['directions'][normal_tuple] = current_id
             current_id += 1
-        normal_dir_id = mappings['directions'][normal_tuple]  # Get ID regardless of whether it was just created
-            
+
         perp1, _ = get_perpendicular_vectors(normal)
         perp_tuple = tuple(perp1)
-        if perp_tuple not in mappings['directions']:
+        if perp_tuple not in geometry['directions']:
             entities.append(f"#{current_id}=DIRECTION('',({perp1[0]:.6f},{perp1[1]:.6f},{perp1[2]:.6f}));")
-            mappings['directions'][perp_tuple] = current_id
+            geometry['directions'][perp_tuple] = current_id
             current_id += 1
-        ref_dir_id = mappings['directions'][perp_tuple]  # Get ID regardless of whether it was just created
+        # Create placements and plane
+        entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{geometry['cartesian_points'][v1]},#{geometry['directions'][normal_tuple]},#{geometry['directions'][perp_tuple]});")
+        axis_placement_id = current_id
+        current_id += 1
+
+        entities.append(f"#{current_id}=PLANE('',#{axis_placement_id});")
+        plane_id = current_id
+        current_id += 1
+
+        # Initialize for edge processing
+        edge_lookup = {tuple(sorted([v1, v2])): i for i, (v1, v2) in enumerate(edges)}
+        outer_oriented_edges = []
+    for group_triangles in merged_groups:
+        if all(idx in excluded_triangles for idx in group_triangles):
+            continue
+        
+        # When creating ORIENTED_EDGEs for planar faces, store their IDs:
+        for edge in outer_loop:
+            sorted_edge = tuple(sorted(edge))
+            edge_idx = edge_lookup[sorted_edge]
+            orientation = '.T.' if edge == sorted_edge else '.F.'
             
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{geometry['edge_curves'][edge_idx]},{orientation});")
+            
+            # Store in appropriate mapping if this edge is part of a cylinder
+            for cyl_idx in geometry['edge_mappings']['planar']['axis_start_end']:
+                if sorted_edge in geometry['edge_mappings']['planar']['axis_start_end'][cyl_idx]:
+                    geometry['edge_mappings']['planar']['axis_start_end'][cyl_idx][sorted_edge] = current_id
+                elif sorted_edge in geometry['edge_mappings']['planar']['axis_intermediate'][cyl_idx]:
+                    geometry['edge_mappings']['planar']['axis_intermediate'][cyl_idx][sorted_edge] = current_id
+                elif sorted_edge in geometry['edge_mappings']['planar']['circumferential'][cyl_idx]:
+                    geometry['edge_mappings']['planar']['circumferential'][cyl_idx][sorted_edge] = current_id
+            
+            outer_oriented_edges.append(current_id)
+            current_id += 1
+            
+    # Process cylindrical faces
+    for cyl_idx, (type_name, face_indices, diameter, center, axis) in enumerate(cylinder_faces):
+        replaced_faces = geometry['face_mappings']['cylindrical_components'].get(cyl_idx, [])
+
+        center_np = np.array(center)
+        axis_np = np.array(axis)
+        ref_dir = np.array(get_perpendicular_vectors(axis)[0])
+        radius = diameter/2
+        
+        # Get height bounds
+        points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
+        heights = np.dot(points - center_np, axis_np)
+        min_height = np.min(heights)
+        max_height = np.max(heights)
+        height = max_height - min_height
+        
+        bottom_center = center_np + min_height * axis_np
+        top_center = center_np + max_height * axis_np
+        
+        entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.6f},{axis[1]:.6f},{axis[2]:.6f}));")
+        direction_ids = {'axis': current_id}
+        current_id += 1
+
+        entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.6f},{ref_dir[1]:.6f},{ref_dir[2]:.6f}));")
+        direction_ids['ref'] = current_id
+        current_id += 1
+
+        # Create center points for placements
+        entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
+        bottom_center_id = current_id
+        current_id += 1
+
+        entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.6f},{top_center[1]:.6f},{top_center[2]:.6f}));")
+        top_center_id = current_id
+        current_id += 1
+
+        # Create placements
+        placement_ids = {}
+        for name, center_id in [('bottom_circle', bottom_center_id), ('top_circle', top_center_id)]:
+            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{center_id},#{direction_ids['axis']},#{direction_ids['ref']});")
+            placement_ids[name] = current_id
+            current_id += 1
+        
+        if type_name == "complete_cylinder":
+            # Create points
+            bottom_point = bottom_center + radius * ref_dir
+            top_point = top_center + radius * ref_dir
+            
+            point_ids = {}
+            for name, point in [
+                ('surface_origin', bottom_center),
+                ('bottom_center', bottom_center),
+                ('top_center', top_center),
+                ('bottom_point', bottom_point),
+                ('top_point', top_point)
+            ]:
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.6f},{point[1]:.6f},{point[2]:.6f}));")
+                point_ids[name] = current_id
+                current_id += 1
+            
+            # Vector for vertical line
+            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.6f});")
+            line_vector_id = current_id
+            current_id += 1
+            
+            # Create vertex points
+            entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids['bottom_point']});")
+            bottom_point_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids['top_point']});")
+            top_point_id = current_id
+            current_id += 1
+            
+            # Line and circles
+            entities.append(f"#{current_id}=LINE('',#{bottom_point_id},#{line_vector_id});")
+            line_id = current_id
+            current_id += 1
+
+            # Line and circles
+            entities.append(f"#{current_id}=LINE('',#{bottom_point_id},#{line_vector_id});")
+            line_id = current_id
+            current_id += 1
+
+            placement_ids = {}
+            for name, point_id in [
+                ('cylinder', 'surface_origin'),
+                ('bottom_circle', 'bottom_center'),
+                ('top_circle', 'top_center')
+            ]:
+                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{point_ids[point_id]},#{direction_ids['axis']},#{direction_ids['ref']});")
+                placement_ids[name] = current_id
+                current_id += 1
+
+
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom_circle']},{radius:.6f});")
+            bottom_circle_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top_circle']},{radius:.6f});")
+            top_circle_id = current_id
+            current_id += 1
+
+            # Edge curves
+            entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_point_id},#{top_point_id},#{line_id},.T.);")
+            line_edge_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_point_id},#{bottom_point_id},#{bottom_circle_id},.T.);")
+            bottom_edge_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=EDGE_CURVE('',#{top_point_id},#{top_point_id},#{top_circle_id},.T.);")
+            top_edge_id = current_id
+            current_id += 1
+            
+            # Create oriented edges with mapping
+            geometry['edge_mappings']['cylindrical']['vertical_edges'][cyl_idx] = {}
+            geometry['edge_mappings']['cylindrical']['curved_edges'][cyl_idx] = {}
+            
+            oriented_edge_ids = []
+            # Map oriented edges as they're created
+            for edge_type, edge_id, orientation in [
+                ('top', top_edge_id, '.T.'),
+                ('vertical_start', line_edge_id, '.F.'),
+                ('bottom', bottom_edge_id, '.F.'),
+                ('vertical_end', line_edge_id, '.T.')
+            ]:
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_id},{orientation});")
+                
+                if edge_type in ('vertical_start', 'vertical_end'):
+                    geometry['edge_mappings']['cylindrical']['vertical_edges'][cyl_idx][edge_type] = current_id
+                else:
+                    geometry['edge_mappings']['cylindrical']['curved_edges'][cyl_idx][edge_type] = current_id
+                
+                oriented_edge_ids.append(current_id)
+                current_id += 1
+
+            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edge_ids)}));")
+            edge_loop_id = current_id
+            current_id += 1
+            
+            # Create face bound
+            entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
+            face_bound_id = current_id
+            current_id += 1
+            
+            # Create cylindrical surface
+            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['cylinder']},{radius:.6f});")
+            surface_id = current_id
+            current_id += 1
+            
+            # Create advanced face
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
+            all_face_ids.append(current_id)
+            current_id += 1
+        else:  # partial cylinder
+            start_bottom, end_bottom, start_top, end_top = generate_partial_cylinder(
+                vertices, triangles, face_indices, diameter, center, axis)
+            
+            # Create points
+            point_ids = {}
+            for name, point in [
+                ('surface_origin', bottom_center),
+                ('bottom_center', bottom_center),
+                ('top_center', top_center),
+                ('start_bottom', start_bottom),
+                ('end_bottom', end_bottom),
+                ('start_top', start_top),
+                ('end_top', end_top)
+            ]:
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.6f},{point[1]:.6f},{point[2]:.6f}));")
+                point_ids[name] = current_id
+                current_id += 1
+            
+            # Create directions
+            direction_ids = {}
+            for name, dir_vector in [('axis', axis), ('ref', ref_dir)]:
+                entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.6f},{dir_vector[1]:.6f},{dir_vector[2]:.6f}));")
+                direction_ids[name] = current_id
+                current_id += 1
+            
+            # Create vertex points
+            vertex_ids = {}
+            for name in ['start_bottom', 'end_bottom', 'start_top', 'end_top']:
+                entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids[name]});")
+                vertex_ids[name] = current_id
+                current_id += 1
+            
+            # Create placements
+            placement_ids = {}
+            for name in ['bottom', 'top']:
+                center_id = point_ids[f'{name}_center']
+                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{center_id},#{direction_ids['axis']},#{direction_ids['ref']});")
+                placement_ids[name] = current_id
+                current_id += 1
+            
+            # Create circles
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom']},{radius:.6f});")
+            bottom_circle_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top']},{radius:.6f});")
+            top_circle_id = current_id
+            current_id += 1
+            
+            # Create vectors and lines for vertical edges
+            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.6f});")
+            line_vector_id = current_id
+            current_id += 1
+            
+            line_ids = {}
+            for name in ['start', 'end']:
+                entities.append(f"#{current_id}=LINE('',#{point_ids[f'{name}_bottom']},#{line_vector_id});")
+                line_ids[name] = current_id
+                current_id += 1
+            # Create oriented edges with mapping
+            geometry['edge_mappings']['cylindrical']['vertical_edges'][cyl_idx] = {}
+            geometry['edge_mappings']['cylindrical']['curved_edges'][cyl_idx] = {}
+            
+            # Map oriented edges as they're created
+            # Create edge curves
+            edge_curve_ids = {
+                'bottom_arc': (vertex_ids['start_bottom'], vertex_ids['end_bottom'], bottom_circle_id),
+                'top_arc': (vertex_ids['start_top'], vertex_ids['end_top'], top_circle_id),
+                'start_line': (vertex_ids['start_bottom'], vertex_ids['start_top'], line_ids['start']),
+                'end_line': (vertex_ids['end_bottom'], vertex_ids['end_top'], line_ids['end'])
+            }
+            
+            for name, (start_vertex, end_vertex, curve) in edge_curve_ids.items():
+                entities.append(f"#{current_id}=EDGE_CURVE('',#{start_vertex},#{end_vertex},#{curve},.T.);")
+                edge_curve_ids[name] = current_id
+                current_id += 1
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_id},{orientation});")
+                
+                if edge_type.startswith('vertical_'):
+                    geometry['edge_mappings']['cylindrical']['vertical_edges'][cyl_idx][edge_type] = current_id
+                else:
+                    geometry['edge_mappings']['cylindrical']['curved_edges'][cyl_idx][edge_type] = current_id
+                
+                oriented_edge_ids.append(current_id)
+                current_id += 1
+                
+    # Create final mapping between planar and cylindrical edges
+    for cyl_idx in geometry['edge_mappings']['planar']['axis_start_end']:
+        # Map vertical edges (start/end)
+        for planar_edge, planar_oriented_id in geometry['edge_mappings']['planar']['axis_start_end'][cyl_idx].items():
+            if planar_oriented_id is not None:
+                cylindrical_oriented_id = geometry['edge_mappings']['cylindrical']['vertical_edges'][cyl_idx].get('vertical_start')
+                if cylindrical_oriented_id:
+                    geometry['edge_mappings']['replacements']['vertical'][planar_oriented_id] = cylindrical_oriented_id
+        
+        # Map curved edges (replacing circumferential)
+        circumferential_edges = []
+        for planar_edge, planar_oriented_id in geometry['edge_mappings']['planar']['circumferential'][cyl_idx].items():
+            if planar_oriented_id is not None:
+                circumferential_edges.append(planar_oriented_id)
+        
+        if circumferential_edges:
+            top_curve_id = geometry['edge_mappings']['cylindrical']['curved_edges'][cyl_idx].get('top')
+            bottom_curve_id = geometry['edge_mappings']['cylindrical']['curved_edges'][cyl_idx].get('bottom')
+            if top_curve_id and bottom_curve_id:
+                geometry['edge_mappings']['replacements']['curved'][tuple(circumferential_edges)] = [top_curve_id, bottom_curve_id]
+
+                    # Create edge loop
+            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edge_ids)}));")
+            edge_loop_id = current_id
+            current_id += 1
+            
+            # Create face bound
+            entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
+            face_bound_id = current_id
+            current_id += 1
+            
+            # Create cylindrical surface
+            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['top']},{radius:.6f});")
+            surface_id = current_id
+            current_id += 1
+            
+            # Create advanced face
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
+            all_face_ids.append(current_id)
+            current_id += 1
+
+    # Create closed shell
+    face_list = ",".join(f"#{id}" for id in all_face_ids)
+    entities.append(f"#{current_id}=CLOSED_SHELL('',({face_list}));")
+    closed_shell_id = current_id
+    current_id += 1
+    
+    # Debug output for face and edge relationships
+    print("\n=== Face Mapping Analysis ===")
+    for planar_id, cylindrical_id in geometry['face_mappings']['planar_to_cylindrical'].items():
+        print(f"Planar Face #{planar_id} was replaced by Cylindrical Face #{cylindrical_id}")
+        
+    for cyl_id, planar_faces in geometry['face_mappings']['cylindrical_components'].items():
+        print(f"\nCylindrical Face Component #{cyl_id} replaced planar triangles:", planar_faces)
+    
+    print("\n=== Edge Mapping Analysis ===")
+    for cyl_idx in geometry['edge_mappings']['planar']['axis_start_end']:
+        print(f"\nCylinder #{cyl_idx} Edge Replacements:")
+        
+        print("\nVertical Edges:")
+        print("Start/End edges (original -> replacement):")
+        print(geometry['edge_mappings']['planar']['axis_start_end'][cyl_idx].items())
+        for edge, oriented_id in geometry['edge_mappings']['planar']['axis_start_end'][cyl_idx].items():
+            if oriented_id is not None:
+                replaced_by = geometry['edge_mappings']['replacements']['vertical'].get(oriented_id, "Not replaced")
+                print(f"  Edge {edge} (#{oriented_id}) -> #{replaced_by}")
+        
+        print("\nIntermediate vertical edges that were removed:")
+        print(geometry['edge_mappings']['planar']['axis_intermediate'][cyl_idx].items())
+        for edge, oriented_id in geometry['edge_mappings']['planar']['axis_intermediate'][cyl_idx].items():
+            if oriented_id is not None:
+                print(f"  Edge {edge} (#{oriented_id})")
+        
+        print("\nCircumferential edges replaced by curves:")
+        print(geometry['edge_mappings']['planar']['circumferential'][cyl_idx].items())
+        for edge, oriented_id in geometry['edge_mappings']['planar']['circumferential'][cyl_idx].items():
+            if oriented_id is not None:
+                print(f"  Edge {edge} (#{oriented_id})")
+        
+        print("\nNew cylindrical edges:")
+        if cyl_idx in geometry['edge_mappings']['cylindrical']['vertical_edges']:
+            print("  Vertical edges:", geometry['edge_mappings']['cylindrical']['vertical_edges'][cyl_idx])
+        if cyl_idx in geometry['edge_mappings']['cylindrical']['curved_edges']:
+            print("  Curved edges:", geometry['edge_mappings']['cylindrical']['curved_edges'][cyl_idx])
+    
+    print("\n=== Edge Replacement Summary ===")
+    print("\nVertical edge replacements (old -> new):")
+    for old_id, new_id in geometry['edge_mappings']['replacements']['vertical'].items():
+        print(f"  #{old_id} -> #{new_id}")
+    
+    print("\nCurved edge replacements (multiple old -> new curved edges):")
+    for old_edges, new_curves in geometry['edge_mappings']['replacements']['curved'].items():
+        print(f"  Original edges {[f'#{e}' for e in old_edges]} replaced by curves {[f'#{c}' for c in new_curves]}")
+
+    return "\n".join(entities), current_id, geometry, closed_shell_id
+"""def generate_step_entities(vertices, edges, triangles, start_id=100):
+    entities = []
+    current_id = start_id
+    all_face_ids = []
+    
+    # Basic geometry data structures
+    geometry = {
+        'cartesian_points': {},
+        'vertex_points': {},
+        'directions': {},
+        'vectors': {},
+        'lines': {},
+        'edge_curves': {},
+        'face_mappings': {
+            'planar_to_cylindrical': {},  # planar_face_id -> cylindrical_face_id
+            'cylindrical_components': {}   # cylindrical_face_id -> [replaced_planar_faces]
+        }
+    }
+    
+    # Generate base points and vertices
+    for i, (x, y, z) in enumerate(vertices):
+        entities.append(f"#{current_id}=CARTESIAN_POINT('',({x:.6f},{y:.6f},{z:.6f}));")
+        geometry['cartesian_points'][i] = current_id
+        current_id += 1
+        
+        entities.append(f"#{current_id}=VERTEX_POINT('',#{geometry['cartesian_points'][i]});")
+        geometry['vertex_points'][i] = current_id
+        current_id += 1
+    
+    # Generate edge geometry
+    for i, (v1, v2) in enumerate(edges):
+        p1 = np.array(vertices[v1])
+        p2 = np.array(vertices[v2])
+        direction = p2 - p1
+        direction = direction / np.linalg.norm(direction)
+        direction_tuple = tuple(direction)
+        
+        if direction_tuple not in geometry['directions']:
+            entities.append(f"#{current_id}=DIRECTION('',({direction[0]:.6f},{direction[1]:.6f},{direction[2]:.6f}));")
+            geometry['directions'][direction_tuple] = current_id
+            current_id += 1
+        
+        entities.append(f"#{current_id}=VECTOR('',#{geometry['directions'][direction_tuple]},1.0);")
+        geometry['vectors'][i] = current_id
+        current_id += 1
+        
+        entities.append(f"#{current_id}=LINE('',#{geometry['cartesian_points'][v1]},#{geometry['vectors'][i]});")
+        geometry['lines'][i] = current_id
+        current_id += 1
+        
+        entities.append(f"#{current_id}=EDGE_CURVE('',#{geometry['vertex_points'][v1]},#{geometry['vertex_points'][v2]},#{geometry['lines'][i]},.T.);")
+        geometry['edge_curves'][i] = current_id
+        current_id += 1
+    
+    # Collect all geometry before creating faces
+    cylinder_faces = detect_cylindrical_faces(vertices, triangles)
+    excluded_triangles = set()
+    cylinder_triangle_map = {}  # Maps triangle_idx -> cylinder_idx
+
+    for cyl_idx, (_, face_indices, _, _, _) in enumerate(cylinder_faces):
+        for tri_idx in face_indices:
+            excluded_triangles.add(tri_idx)
+            cylinder_triangle_map[tri_idx] = cyl_idx
+    
+    # Process planar faces
+    merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.001)
+    planar_face_groups = {}  # Maps triangle_idx -> planar_face_id
+    
+    for group_idx, group_triangles in enumerate(merged_groups):
+        # Skip if all triangles are part of cylinder
+        if all(idx in excluded_triangles for idx in group_triangles):
+            # Map these triangles to their cylinder
+            cyl_idx = cylinder_triangle_map[group_triangles[0]]
+            if cyl_idx not in geometry['face_mappings']['cylindrical_components']:
+                geometry['face_mappings']['cylindrical_components'][cyl_idx] = []
+            geometry['face_mappings']['cylindrical_components'][cyl_idx].extend(group_triangles)
+            continue
+        
+        v1, v2, v3, normal = triangles[group_triangles[0]]
+        outer_loop, inner_loops = get_face_boundaries(vertices, triangles, group_triangles, edges)
+        
+        # Create normal direction
+        normal_tuple = tuple(normal)
+        if normal_tuple not in geometry['directions']:
+            entities.append(f"#{current_id}=DIRECTION('',({normal[0]:.6f},{normal[1]:.6f},{normal[2]:.6f}));")
+            geometry['directions'][normal_tuple] = current_id
+            current_id += 1
+        
+        # Create reference direction
+        perp1, _ = get_perpendicular_vectors(normal)
+        perp_tuple = tuple(perp1)
+        if perp_tuple not in geometry['directions']:
+            entities.append(f"#{current_id}=DIRECTION('',({perp1[0]:.6f},{perp1[1]:.6f},{perp1[2]:.6f}));")
+            geometry['directions'][perp_tuple] = current_id
+            current_id += 1
+        
         # Create axis placement
-        entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{mappings['cartesian_points'][v1]},#{normal_dir_id},#{ref_dir_id});")
+        entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{geometry['cartesian_points'][v1]},#{geometry['directions'][normal_tuple]},#{geometry['directions'][perp_tuple]});")
         axis_placement_id = current_id
         current_id += 1
         
@@ -512,19 +1031,20 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         plane_id = current_id
         current_id += 1
         
-        # Process outer loop edges
+        # Process outer loop
         edge_lookup = {tuple(sorted([v1, v2])): i for i, (v1, v2) in enumerate(edges)}
         outer_oriented_edges = []
+        
         for edge in outer_loop:
             sorted_edge = tuple(sorted(edge))
             edge_idx = edge_lookup[sorted_edge]
             orientation = '.T.' if edge == sorted_edge else '.F.'
             
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{mappings['edge_curves'][edge_idx]},{orientation});")
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{geometry['edge_curves'][edge_idx]},{orientation});")
             outer_oriented_edges.append(current_id)
             current_id += 1
         
-        # Create outer edge loop and face bound
+        # Create outer edge loop and bound
         entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in outer_oriented_edges)}));")
         outer_loop_id = current_id
         current_id += 1
@@ -542,7 +1062,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 edge_idx = edge_lookup[sorted_edge]
                 orientation = '.T.' if edge == sorted_edge else '.F.'
                 
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{mappings['edge_curves'][edge_idx]},{orientation});")
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{geometry['edge_curves'][edge_idx]},{orientation});")
                 inner_oriented_edges.append(current_id)
                 current_id += 1
             
@@ -554,336 +1074,266 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             inner_bound_ids.append(current_id)
             current_id += 1
         
-        # Create advanced face with all bounds
+        # Create advanced face
         bound_list = f"#{outer_bound_id}"
         if inner_bound_ids:
             bound_list += "," + ",".join(f"#{id}" for id in inner_bound_ids)
         entities.append(f"#{current_id}=ADVANCED_FACE('',({bound_list}),#{plane_id},.T.);")
-        all_face_ids.append(current_id)  # Add face ID directly to our list
+        all_face_ids.append(current_id)
         current_id += 1
+        
+        for tri_idx in group_triangles:
+            planar_face_groups[tri_idx] = current_id
+        all_face_ids.append(current_id)
+        current_id += 1
+        
+    # Process cylindrical faces
+    for cyl_idx, (type_name, face_indices, diameter, center, axis) in enumerate(cylinder_faces):
+        replaced_faces = geometry['face_mappings']['cylindrical_components'].get(cyl_idx, [])
 
-    # Process cylindrical faces (existing code)
-    if enable_curved_surfaces:
-        for cyl_idx, (type_name, face_indices, diameter, center, axis) in enumerate(cylinder_faces):
-            center_np = np.array(center)
-            axis_np = np.array(axis)
+        center_np = np.array(center)
+        axis_np = np.array(axis)
+        ref_dir = np.array(get_perpendicular_vectors(axis)[0])
+        radius = diameter/2
+        
+        # Get height bounds
+        points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
+        heights = np.dot(points - center_np, axis_np)
+        min_height = np.min(heights)
+        max_height = np.max(heights)
+        height = max_height - min_height
+        
+        bottom_center = center_np + min_height * axis_np
+        top_center = center_np + max_height * axis_np
+        
+        if type_name == "complete_cylinder":
+            # Create points
+            bottom_point = bottom_center + radius * ref_dir
+            top_point = top_center + radius * ref_dir
             
-            # Get all vertices involved in this cylindrical face
-            face_vertices = set()
-            for idx in face_indices:
-                v1, v2, v3, _ = triangles[idx]
-                face_vertices.update([v1, v2, v3])
-            
-            # Calculate actual height from vertices
-            points = np.array([vertices[i] for i in face_vertices])
-            heights = np.dot(points - center_np, axis_np)
-            min_height = np.min(heights)
-            max_height = np.max(heights)
-            height = max_height - min_height
-            
-            # Calculate top and bottom centers accurately
-            bottom_center = center_np + min_height * axis_np
-            top_center = center_np + max_height * axis_np
-            
-            # Create reference directions (following example structure)
-            # Primary axis is the cylinder axis (like #176 in example)
-            # Reference direction is perpendicular (like #177 in example)
-            #ref_dir = get_perpendicular_vectors(axis)[0]
-            ref_dir = np.array(get_perpendicular_vectors(axis)[0])
-
-            
-            if type_name == "complete_cylinder":
-                print("complete cylinder ID")
-
-                # Create points (following example structure)
-                # Bottom reference point
-                radius = diameter/2
-                bottom_point = bottom_center + radius * np.array(ref_dir)
-                # Top reference point
-                top_point = top_center + radius * np.array(ref_dir)
-            
-                # 1. Create all CARTESIAN_POINTs
-                # Center point for cylindrical surface (like #214 in example)
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
-                surface_origin_id = current_id
+            point_ids = {}
+            for name, point in [
+                ('surface_origin', bottom_center),
+                ('bottom_center', bottom_center),
+                ('top_center', top_center),
+                ('bottom_point', bottom_point),
+                ('top_point', top_point)
+            ]:
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.6f},{point[1]:.6f},{point[2]:.6f}));")
+                point_ids[name] = current_id
                 current_id += 1
             
-                # Points for the circles' centers
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
-                bottom_center_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.6f},{top_center[1]:.6f},{top_center[2]:.6f}));")
-                top_center_id = current_id
+            # Create directions
+            direction_ids = {}
+            for name, dir_vector in [('axis', axis), ('ref', ref_dir)]:
+                entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.6f},{dir_vector[1]:.6f},{dir_vector[2]:.6f}));")
+                direction_ids[name] = current_id
                 current_id += 1
             
-                # Points for vertices
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_point[0]:.6f},{bottom_point[1]:.6f},{bottom_point[2]:.6f}));")
-                bottom_point_id = current_id
+            # Create vertex points
+            entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids['bottom_point']});")
+            bottom_vertex_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids['top_point']});")
+            top_vertex_id = current_id
+            current_id += 1
+            
+            # Create placements
+            placement_ids = {}
+            for name, point_id in [
+                ('cylinder', 'surface_origin'),
+                ('bottom_circle', 'bottom_center'),
+                ('top_circle', 'top_center')
+            ]:
+                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{point_ids[point_id]},#{direction_ids['axis']},#{direction_ids['ref']});")
+                placement_ids[name] = current_id
                 current_id += 1
             
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_point[0]:.6f},{top_point[1]:.6f},{top_point[2]:.6f}));")
-                top_point_id = current_id
+            # Create circles
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom_circle']},{radius:.6f});")
+            bottom_circle_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top_circle']},{radius:.6f});")
+            top_circle_id = current_id
+            current_id += 1
+            
+            # Create line for vertical edges
+            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.6f});")
+            line_vector_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=LINE('',#{point_ids['bottom_point']},#{line_vector_id});")
+            line_id = current_id
+            current_id += 1
+            
+            # Create edge curves
+            entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{top_vertex_id},#{line_id},.T.);")
+            line_edge_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{bottom_vertex_id},#{bottom_circle_id},.T.);")
+            bottom_edge_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=EDGE_CURVE('',#{top_vertex_id},#{top_vertex_id},#{top_circle_id},.T.);")
+            top_edge_id = current_id
+            current_id += 1
+            
+            # Create oriented edges
+            oriented_edge_ids = []
+            for edge_id, orientation in [
+                (top_edge_id, '.T.'),
+                (line_edge_id, '.F.'),
+                (bottom_edge_id, '.F.'),
+                (line_edge_id, '.T.')
+            ]:
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_id},{orientation});")
+                oriented_edge_ids.append(current_id)
                 current_id += 1
             
-                # 2. Create DIRECTIONs (following example #176, #177)
-                entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.6f},{axis[1]:.6f},{axis[2]:.6f}));")
-                axis_direction_id = current_id
+            # Create edge loop
+            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edge_ids)}));")
+            edge_loop_id = current_id
+            current_id += 1
+            
+            # Create face bound
+            entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
+            face_bound_id = current_id
+            current_id += 1
+            
+            # Create cylindrical surface
+            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['cylinder']},{radius:.6f});")
+            surface_id = current_id
+            current_id += 1
+            
+            # Create advanced face
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
+            all_face_ids.append(current_id)
+            current_id += 1
+            
+        else:  # partial cylinder
+            start_bottom, end_bottom, start_top, end_top = generate_partial_cylinder(
+                vertices, triangles, face_indices, diameter, center, axis)
+            
+            # Create points
+            point_ids = {}
+            for name, point in [
+                ('surface_origin', bottom_center),
+                ('bottom_center', bottom_center),
+                ('top_center', top_center),
+                ('start_bottom', start_bottom),
+                ('end_bottom', end_bottom),
+                ('start_top', start_top),
+                ('end_top', end_top)
+            ]:
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.6f},{point[1]:.6f},{point[2]:.6f}));")
+                point_ids[name] = current_id
                 current_id += 1
             
-                entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.6f},{ref_dir[1]:.6f},{ref_dir[2]:.6f}));")
-                ref_direction_id = current_id
+            # Create directions
+            direction_ids = {}
+            for name, dir_vector in [('axis', axis), ('ref', ref_dir)]:
+                entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.6f},{dir_vector[1]:.6f},{dir_vector[2]:.6f}));")
+                direction_ids[name] = current_id
                 current_id += 1
             
-                # 3. Create VERTEX_POINTs (like #69, #71, #76, #77 in example)
-                entities.append(f"#{current_id}=VERTEX_POINT('',#{bottom_point_id});")
-                bottom_vertex_id = current_id
+            # Create vertex points
+            vertex_ids = {}
+            for name in ['start_bottom', 'end_bottom', 'start_top', 'end_top']:
+                entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids[name]});")
+                vertex_ids[name] = current_id
                 current_id += 1
             
-                entities.append(f"#{current_id}=VERTEX_POINT('',#{top_point_id});")
-                top_vertex_id = current_id
+            # Create placements
+            placement_ids = {}
+            for name in ['bottom', 'top']:
+                center_id = point_ids[f'{name}_center']
+                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{center_id},#{direction_ids['axis']},#{direction_ids['ref']});")
+                placement_ids[name] = current_id
                 current_id += 1
             
-                # 4. Create AXIS2_PLACEMENT_3D for the cylindrical surface (like #148 in example)
-                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{surface_origin_id},#{axis_direction_id},#{ref_direction_id});")
-                cylinder_placement_id = current_id
+            # Create circles
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom']},{radius:.6f});")
+            bottom_circle_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top']},{radius:.6f});")
+            top_circle_id = current_id
+            current_id += 1
+            
+            # Create vectors and lines for vertical edges
+            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.6f});")
+            line_vector_id = current_id
+            current_id += 1
+            
+            line_ids = {}
+            for name in ['start', 'end']:
+                entities.append(f"#{current_id}=LINE('',#{point_ids[f'{name}_bottom']},#{line_vector_id});")
+                line_ids[name] = current_id
                 current_id += 1
             
-                # Create placements for circles (separate for top and bottom)
-                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{bottom_center_id},#{axis_direction_id},#{ref_direction_id});")
-                bottom_circle_placement_id = current_id
+            # Create edge curves
+            edge_curve_ids = {
+                'bottom_arc': (vertex_ids['start_bottom'], vertex_ids['end_bottom'], bottom_circle_id),
+                'top_arc': (vertex_ids['start_top'], vertex_ids['end_top'], top_circle_id),
+                'start_line': (vertex_ids['start_bottom'], vertex_ids['start_top'], line_ids['start']),
+                'end_line': (vertex_ids['end_bottom'], vertex_ids['end_top'], line_ids['end'])
+            }
+            
+            for name, (start_vertex, end_vertex, curve) in edge_curve_ids.items():
+                entities.append(f"#{current_id}=EDGE_CURVE('',#{start_vertex},#{end_vertex},#{curve},.T.);")
+                edge_curve_ids[name] = current_id
                 current_id += 1
             
-                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{top_center_id},#{axis_direction_id},#{ref_direction_id});")
-                top_circle_placement_id = current_id
+            # Create oriented edges
+            oriented_edges = []
+            for edge_id, orientation in [
+                (edge_curve_ids['bottom_arc'], '.T.'),
+                (edge_curve_ids['end_line'], '.T.'),
+                (edge_curve_ids['top_arc'], '.F.'),
+                (edge_curve_ids['start_line'], '.F.')
+            ]:
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_id},{orientation});")
+                oriented_edges.append(current_id)
                 current_id += 1
             
-                # 5. Create CIRCLEs (like #20, #21 in example)
-                entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{radius:.6f});")
-                bottom_circle_id = current_id
-                current_id += 1
+            # Create edge loop
+            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edges)}));")
+            edge_loop_id = current_id
+            current_id += 1
             
-                entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{radius:.6f});")
-                top_circle_id = current_id
-                current_id += 1
+            # Create face bound
+            entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
+            face_bound_id = current_id
+            current_id += 1
             
-                # 6. Create LINE between points (like #81, #89 in example)
-                # Create vector for the line direction
-                entities.append(f"#{current_id}=VECTOR('',#{axis_direction_id},{height:.6f});")
-                line_vector_id = current_id
-                current_id += 1
+            # Create cylindrical surface
+            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['top']},{radius:.6f});")
+            surface_id = current_id
+            current_id += 1
             
-                entities.append(f"#{current_id}=LINE('',#{bottom_point_id},#{line_vector_id});")
-                line_id = current_id
-                current_id += 1
-            
-                # 7. Create EDGE_CURVEs (like #56, #64, #66, #67 in example)
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{top_vertex_id},#{line_id},.T.);")
-                line_edge_id = current_id
-                current_id += 1
-            
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{bottom_vertex_id},#{bottom_circle_id},.T.);")
-                bottom_edge_id = current_id
-                current_id += 1
-            
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{top_vertex_id},#{top_vertex_id},#{top_circle_id},.T.);")
-                top_edge_id = current_id
-                current_id += 1
-            
-                # 8. Create ORIENTED_EDGEs (like #39, #40, #41, #42 in example)
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
-                oriented_edge1_id = current_id
-                current_id += 1
-            
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.F.);")
-                oriented_edge2_id = current_id
-                current_id += 1
-            
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.F.);")
-                oriented_edge3_id = current_id
-                current_id += 1
-            
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.T.);")
-                oriented_edge4_id = current_id
-                current_id += 1
-            
-                # 9. Create EDGE_LOOP (like #108 in example)
-                edge_loop_str = f"#{oriented_edge1_id},#{oriented_edge2_id},#{oriented_edge3_id},#{oriented_edge4_id}"
-                entities.append(f"#{current_id}=EDGE_LOOP('',({edge_loop_str}));")
-                edge_loop_id = current_id
-                current_id += 1
-            
-                # 10. Create FACE_BOUND (like #115 in example)
-                entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
-                face_bound_id = current_id
-                current_id += 1
-            
-                # 11. Create CYLINDRICAL_SURFACE (like #22 in example)
-                entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{radius:.6f});")
-                surface_id = current_id
-                current_id += 1
-            
-                # 12. Create ADVANCED_FACE (like #128 in example)
-                entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
-                cylindrical_mappings['faces'][cyl_idx] = current_id
-                all_face_ids.append(current_id)
-                current_id += 1
-
-
-                pass
-                
-            else:  # "partial_cylinder"
-                print("partial cylinder ID")
-               # Calculate boundary points
-                start_bottom, end_bottom, start_top, end_top = generate_partial_cylinder(
-                   vertices, triangles, face_indices, diameter, center, axis
-                )
-
-                # 1. CARTESIAN_POINTs
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
-                surface_origin_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
-                bottom_center_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.6f},{top_center[1]:.6f},{top_center[2]:.6f}));")
-                top_center_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({start_bottom[0]:.6f},{start_bottom[1]:.6f},{start_bottom[2]:.6f}));")
-                start_bottom_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({end_bottom[0]:.6f},{end_bottom[1]:.6f},{end_bottom[2]:.6f}));")
-                end_bottom_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({start_top[0]:.6f},{start_top[1]:.6f},{start_top[2]:.6f}));")
-                start_top_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({end_top[0]:.6f},{end_top[1]:.6f},{end_top[2]:.6f}));")
-                end_top_id = current_id
-                current_id += 1
-
-                # 2. DIRECTIONs
-                entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.6f},{axis[1]:.6f},{axis[2]:.6f}));")
-                axis_dir_id = current_id
-                current_id += 1
-
-                ref_dir = get_perpendicular_vectors(axis)[0]
-                entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.6f},{ref_dir[1]:.6f},{ref_dir[2]:.6f}));")
-                ref_dir_id = current_id
-                current_id += 1
-
-                # 3. VERTEX_POINTs
-                entities.append(f"#{current_id}=VERTEX_POINT('',#{start_bottom_id});")
-                start_bottom_vertex_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=VERTEX_POINT('',#{end_bottom_id});")
-                end_bottom_vertex_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=VERTEX_POINT('',#{start_top_id});")
-                start_top_vertex_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=VERTEX_POINT('',#{end_top_id});")
-                end_top_vertex_id = current_id
-                current_id += 1
-
-                # 4. AXIS2_PLACEMENT_3D
-                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{bottom_center_id},#{axis_dir_id},#{ref_dir_id});")
-                bottom_placement_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{top_center_id},#{axis_dir_id},#{ref_dir_id});")
-                top_placement_id = current_id
-                current_id += 1
-
-                # 5. CIRCLEs
-                radius = diameter / 2
-                entities.append(f"#{current_id}=CIRCLE('',#{bottom_placement_id},{radius:.6f});")
-                bottom_circle_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=CIRCLE('',#{top_placement_id},{radius:.6f});")
-                top_circle_id = current_id
-                current_id += 1
-
-                # 6. VECTORs and LINEs
-                height = np.linalg.norm(np.array(start_top) - np.array(start_bottom))
-                entities.append(f"#{current_id}=VECTOR('',#{axis_dir_id},{height:.6f});")
-                line_vector_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=LINE('',#{start_bottom_id},#{line_vector_id});")
-                line1_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=LINE('',#{end_bottom_id},#{line_vector_id});")
-                line2_id = current_id
-                current_id += 1
-
-                # 7. EDGE_CURVEs
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{start_bottom_vertex_id},#{end_bottom_vertex_id},#{bottom_circle_id},.T.);")
-                bottom_arc_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{start_top_vertex_id},#{end_top_vertex_id},#{top_circle_id},.T.);")
-                top_arc_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{start_bottom_vertex_id},#{start_top_vertex_id},#{line1_id},.T.);")
-                line1_edge_id = current_id
-                current_id += 1
-
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{end_bottom_vertex_id},#{end_top_vertex_id},#{line2_id},.T.);")
-                line2_edge_id = current_id
-                current_id += 1
-
-                # 8. ORIENTED_EDGEs
-                oriented_edges = []
-                for edge_id, orientation in [
-                   (bottom_arc_id, '.T.'),
-                   (line2_edge_id, '.T.'),
-                   (top_arc_id, '.F.'),
-                   (line1_edge_id, '.F.')
-                ]:
-                   entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_id},{orientation});")
-                   oriented_edges.append(current_id)
-                   current_id += 1
-
-                # 9. EDGE_LOOP
-                entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edges)}));")
-                edge_loop_id = current_id
-                current_id += 1
-
-                # 10. FACE_BOUND
-                entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
-                face_bound_id = current_id
-                current_id += 1
-
-                # 11. CYLINDRICAL_SURFACE
-                entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{top_placement_id},{radius:.6f});")
-                surface_id = current_id
-                current_id += 1
-
-                # 12. ADVANCED_FACE
-                entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
-                cylindrical_mappings['faces'][cyl_idx] = current_id
-                all_face_ids.append(current_id)
-                current_id += 1
-
+            # Create advanced face
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
+            all_face_ids.append(current_id)
+            current_id += 1
+    
+        cylinder_face_id = current_id
+        for tri_idx in face_indices:
+            if tri_idx in planar_face_groups:
+                geometry['face_mappings']['planar_to_cylindrical'][planar_face_groups[tri_idx]] = cylinder_face_id
+        
+        all_face_ids.append(cylinder_face_id)
+        current_id += 1
+        
+    # Create closed shell
     face_list = ",".join(f"#{id}" for id in all_face_ids)
-    entities.append(f"#{current_id}=CLOSED_SHELL('',({face_list})); /* complete shell */")
+    entities.append(f"#{current_id}=CLOSED_SHELL('',({face_list}));")
     closed_shell_id = current_id
     current_id += 1
     
-    return "\n".join(entities), current_id, mappings, closed_shell_id
+    return "\n".join(entities), current_id, geometry, closed_shell_id"""
 
 def get_face_boundaries(vertices, triangles, group_indices, edges):
     """Get outer and inner loops for a merged face group"""
@@ -1048,5 +1498,3 @@ END-ISO-10303-21;"""
     with open(filename, 'w') as f:
         f.write(step_content)
     return True
-
-vertices, triangles, edges = parse('cylinder.stl')
