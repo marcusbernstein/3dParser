@@ -512,8 +512,6 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         
         if type_name == "complete_cylinder":
             print("complete cylinder ID")
-
-            # Create points (following example structure)
             # Bottom reference point
             radius = diameter/2
             bottom_point = bottom_center + radius * np.array(ref_dir)
@@ -625,6 +623,21 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             oriented_edge4_id = current_id
             current_id += 1
 
+            for edge_id in [top_edge_id, bottom_edge_id]:
+                arc_vertices = set()
+                for v1, v2 in component_edges:
+                    v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
+                    v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                    if edge_id == top_edge_id and abs(v1_height - height) < abs(v1_height):
+                        arc_vertices.add(v1)
+                    if edge_id == top_edge_id and abs(v2_height - height) < abs(v2_height):
+                        arc_vertices.add(v2)
+                    if edge_id == bottom_edge_id and abs(v1_height) < abs(v1_height - height):
+                        arc_vertices.add(v1)
+                    if edge_id == bottom_edge_id and abs(v2_height) < abs(v2_height - height):
+                        arc_vertices.add(v2)
+                curved_edge_vertices[edge_id] = arc_vertices
+
             # 9. Create EDGE_LOOP (like #108 in example)
             edge_loop_str = f"#{oriented_edge1_id},#{oriented_edge2_id},#{oriented_edge3_id},#{oriented_edge4_id}"
             entities.append(f"#{current_id}=EDGE_LOOP('',({edge_loop_str}));")
@@ -643,6 +656,55 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
 
             # 12. Create ADVANCED_FACE (like #128 in example)
             entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
+            all_face_ids.append(current_id)
+            current_id += 1
+            
+            # Create top circular face
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
+            top_circle_oriented_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=EDGE_LOOP('',(#{top_circle_oriented_id}));")
+            top_loop_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=FACE_BOUND('',#{top_loop_id},.T.);")
+            top_bound_id = current_id
+            current_id += 1
+            
+            # Create plane for top face
+            entities.append(f"#{current_id}=PLANE('',#{top_circle_placement_id});")
+            top_plane_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{top_bound_id}),#{top_plane_id},.F.);")
+            all_face_ids.append(current_id)
+            current_id += 1
+            
+            # Create bottom circular face
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.T.);")
+            bottom_circle_oriented_id = current_id
+            current_id += 1
+
+            bottom_vertices = {i for tri in face_indices for i in triangles[tri][:3] 
+                              if abs(np.dot(np.array(vertices[i]) - bottom_center, axis_np)) < 0.001}
+
+            curved_edge_vertices[oriented_edge3_id] = bottom_vertices
+            
+            entities.append(f"#{current_id}=EDGE_LOOP('',(#{bottom_circle_oriented_id}));")
+            bottom_loop_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=FACE_BOUND('',#{bottom_loop_id},.T.);")
+            bottom_bound_id = current_id
+            current_id += 1
+            
+            # Create plane for bottom face
+            entities.append(f"#{current_id}=PLANE('',#{bottom_circle_placement_id});")
+            bottom_plane_id = current_id
+            current_id += 1
+            
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{bottom_bound_id}),#{bottom_plane_id},.T.);")
             all_face_ids.append(current_id)
             current_id += 1
             
@@ -1025,6 +1087,10 @@ def analyze_edge_loop_simple(edge_loop_str, edges_to_remove, edge_lookup, geomet
     print("Edge IDs in loop:", edge_ids)
     
     edges_to_replace = []
+    
+    # Check if this is a single-edge loop (indicates a circle)
+    if len(edge_ids) == 1:
+        return []  # Don't modify circular loops
     
     # For each ORIENTED_EDGE in the loop
     for edge_id in edge_ids:
