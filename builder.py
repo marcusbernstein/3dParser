@@ -150,7 +150,7 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
     
     return diameter, tuple(center_point), tuple(axis_vector)
 
-def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_tolerance=0.0001, normal_tolerance=0.01, max_angle=np.pi/12):
+def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_tolerance=0.001, normal_tolerance=0.01, max_angle=np.pi/12):
     # First merge coplanar triangles
     merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance)
     
@@ -420,7 +420,6 @@ def generate_partial_cylinder(vertices, triangles, face_indices, diameter, cente
     
     return start_bottom, end_bottom, start_top, end_top
 
-
 def generate_step_entities(vertices, edges, triangles, start_id=100):
     entities = []
     current_id = start_id
@@ -491,6 +490,16 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         ref_dir = np.array(get_perpendicular_vectors(axis)[0])
         radius = diameter/2
         
+        ref_dir = np.array(get_perpendicular_vectors(axis)[0])
+        # Fixes corrupt partial cylinders Flip ref_dir if points in wrong direction
+        first_vertex = np.array(vertices[triangles[face_indices[0]][0]]) - center_np
+        first_proj = first_vertex - np.dot(first_vertex, axis_np) * axis_np
+        if np.dot(first_proj, ref_dir) >= 0:
+            print("FLIPPED!")
+            print(ref_dir)
+            ref_dir = -ref_dir
+            print(ref_dir)
+        
         # Get height bounds
         points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
         heights = np.dot(points - center_np, axis_np)
@@ -502,126 +511,137 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         top_center = center_np + max_height * axis_np
         
         if type_name == "complete_cylinder":
-            print("complete cylinder")
+            print("complete cylinder ID")
 
-            # Create points
-            bottom_point = bottom_center + radius * ref_dir
-            top_point = top_center + radius * ref_dir
-            
-            point_ids = {}
-            for name, point in [
-                ('surface_origin', bottom_center),
-                ('bottom_center', bottom_center),
-                ('top_center', top_center),
-                ('bottom_point', bottom_point),
-                ('top_point', top_point)
-            ]:
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.6f},{point[1]:.6f},{point[2]:.6f}));")
-                point_ids[name] = current_id
-                current_id += 1
-            
-            # Create directions
-            direction_ids = {}
-            for name, dir_vector in [('axis', axis), ('ref', ref_dir)]:
-                entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.6f},{dir_vector[1]:.6f},{dir_vector[2]:.6f}));")
-                direction_ids[name] = current_id
-                current_id += 1
-            
-            # Create vertex points
-            entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids['bottom_point']});")
+            # Create points (following example structure)
+            # Bottom reference point
+            radius = diameter/2
+            bottom_point = bottom_center + radius * np.array(ref_dir)
+            # Top reference point
+            top_point = top_center + radius * np.array(ref_dir)
+
+            # 1. Create all CARTESIAN_POINTs
+            # Center point for cylindrical surface (like #214 in example)
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
+            surface_origin_id = current_id
+            current_id += 1
+
+            # Points for the circles' centers
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
+            bottom_center_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.6f},{top_center[1]:.6f},{top_center[2]:.6f}));")
+            top_center_id = current_id
+            current_id += 1
+
+            # Points for vertices
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_point[0]:.6f},{bottom_point[1]:.6f},{bottom_point[2]:.6f}));")
+            bottom_point_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_point[0]:.6f},{top_point[1]:.6f},{top_point[2]:.6f}));")
+            top_point_id = current_id
+            current_id += 1
+
+            # 2. Create DIRECTIONs (following example #176, #177)
+            entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.6f},{axis[1]:.6f},{axis[2]:.6f}));")
+            axis_direction_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.6f},{ref_dir[1]:.6f},{ref_dir[2]:.6f}));")
+            ref_direction_id = current_id
+            current_id += 1
+
+            # 3. Create VERTEX_POINTs (like #69, #71, #76, #77 in example)
+            entities.append(f"#{current_id}=VERTEX_POINT('',#{bottom_point_id});")
             bottom_vertex_id = current_id
             current_id += 1
-            
-            entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids['top_point']});")
+
+            entities.append(f"#{current_id}=VERTEX_POINT('',#{top_point_id});")
             top_vertex_id = current_id
             current_id += 1
-            
-            # Create placements
-            placement_ids = {}
-            for name, point_id in [
-                ('cylinder', 'surface_origin'),
-                ('bottom_circle', 'bottom_center'),
-                ('top_circle', 'top_center')
-            ]:
-                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{point_ids[point_id]},#{direction_ids['axis']},#{direction_ids['ref']});")
-                placement_ids[name] = current_id
-                current_id += 1
-            
-            # Create circles
-            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom_circle']},{radius:.6f});")
+
+            # 4. Create AXIS2_PLACEMENT_3D for the cylindrical surface (like #148 in example)
+            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{surface_origin_id},#{axis_direction_id},#{ref_direction_id});")
+            cylinder_placement_id = current_id
+            current_id += 1
+
+            # Create placements for circles (separate for top and bottom)
+            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{bottom_center_id},#{axis_direction_id},#{ref_direction_id});")
+            bottom_circle_placement_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{top_center_id},#{axis_direction_id},#{ref_direction_id});")
+            top_circle_placement_id = current_id
+            current_id += 1
+
+            # 5. Create CIRCLEs (like #20, #21 in example)
+            entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{radius:.6f});")
             bottom_circle_id = current_id
             current_id += 1
-            
-            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top_circle']},{radius:.6f});")
+
+            entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{radius:.6f});")
             top_circle_id = current_id
             current_id += 1
-            
-            # Create line for vertical edges
-            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.6f});")
+
+            # 6. Create LINE between points (like #81, #89 in example)
+            # Create vector for the line direction
+            entities.append(f"#{current_id}=VECTOR('',#{axis_direction_id},{height:.6f});")
             line_vector_id = current_id
             current_id += 1
-            
-            entities.append(f"#{current_id}=LINE('',#{point_ids['bottom_point']},#{line_vector_id});")
+
+            entities.append(f"#{current_id}=LINE('',#{bottom_point_id},#{line_vector_id});")
             line_id = current_id
             current_id += 1
-            
-            # Create edge curves
+
+            # 7. Create EDGE_CURVEs (like #56, #64, #66, #67 in example)
             entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{top_vertex_id},#{line_id},.T.);")
             line_edge_id = current_id
             current_id += 1
-            
+
             entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{bottom_vertex_id},#{bottom_circle_id},.T.);")
             bottom_edge_id = current_id
             current_id += 1
-            
+
             entities.append(f"#{current_id}=EDGE_CURVE('',#{top_vertex_id},#{top_vertex_id},#{top_circle_id},.T.);")
             top_edge_id = current_id
             current_id += 1
-            
-            entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{bottom_vertex_id},#{bottom_circle_id},.T.);")
-            bottom_edge_id = current_id
+
+            # 8. Create ORIENTED_EDGEs (like #39, #40, #41, #42 in example)
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
+            oriented_edge1_id = current_id
             current_id += 1
 
-            # Create oriented edges
-            oriented_edge_ids = []
-            for edge_id, orientation in [
-                (top_edge_id, '.T.'),
-                (line_edge_id, '.F.'),
-                (bottom_edge_id, '.F.'),
-                (line_edge_id, '.T.')
-            ]:
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_id},{orientation});")
-                oriented_edge_id = current_id
-                oriented_edge_ids.append(oriented_edge_id)
-                
-                # Store circle vertices with ORIENTED_EDGE ID instead of EDGE_CURVE ID
-                if edge_id in (top_edge_id, bottom_edge_id):
-                    print(f"\nStoring complete circle {oriented_edge_id}")
-                    print(f"Component edges: {component_edges}")
-                    circle_vertices = set()
-                    for v1, v2 in component_edges:
-                        circle_vertices.add(v1)
-                        circle_vertices.add(v2)
-                    curved_edge_vertices[oriented_edge_id] = circle_vertices
-                    print(f"Stored circle vertices: {circle_vertices}")
-                current_id += 1
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.F.);")
+            oriented_edge2_id = current_id
+            current_id += 1
 
-            # Create edge loop
-            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edge_ids)}));")
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.F.);")
+            oriented_edge3_id = current_id
+            current_id += 1
+
+            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.T.);")
+            oriented_edge4_id = current_id
+            current_id += 1
+
+            # 9. Create EDGE_LOOP (like #108 in example)
+            edge_loop_str = f"#{oriented_edge1_id},#{oriented_edge2_id},#{oriented_edge3_id},#{oriented_edge4_id}"
+            entities.append(f"#{current_id}=EDGE_LOOP('',({edge_loop_str}));")
             edge_loop_id = current_id
             current_id += 1
-            
-            # Create face bound
+
+            # 10. Create FACE_BOUND (like #115 in example)
             entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
             face_bound_id = current_id
             current_id += 1
-            
-            # Create cylindrical surface
-            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['cylinder']},{radius:.6f});")
+
+            # 11. Create CYLINDRICAL_SURFACE (like #22 in example)
+            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{radius:.6f});")
             surface_id = current_id
             current_id += 1
-            
-            # Create advanced face
+
+            # 12. Create ADVANCED_FACE (like #128 in example)
             entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
             all_face_ids.append(current_id)
             current_id += 1
