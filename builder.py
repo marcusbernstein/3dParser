@@ -207,7 +207,9 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
     cylindrical_faces = []
     processed = set()
     removed_edges = set()  # Track all removed edges
-
+    print("area groups final")
+    print(area_groups)
+    print(area_groups.items())
     for area, group_list in area_groups.items():
         if len(group_list) < 3:
             continue
@@ -512,20 +514,14 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         
         if type_name == "complete_cylinder":
             print("complete cylinder ID")
-            # Bottom reference point
             radius = diameter/2
             bottom_point = bottom_center + radius * np.array(ref_dir)
-            # Top reference point
             top_point = top_center + radius * np.array(ref_dir)
 
             # 1. Create all CARTESIAN_POINTs
             # Center point for cylindrical surface (like #214 in example)
             entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
             surface_origin_id = current_id
-            current_id += 1
-
-            # Points for the circles' centers
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
             bottom_center_id = current_id
             current_id += 1
 
@@ -560,13 +556,9 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             top_vertex_id = current_id
             current_id += 1
 
-            # 4. Create AXIS2_PLACEMENT_3D for the cylindrical surface (like #148 in example)
-            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{surface_origin_id},#{axis_direction_id},#{ref_direction_id});")
-            cylinder_placement_id = current_id
-            current_id += 1
-
             # Create placements for circles (separate for top and bottom)
             entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{bottom_center_id},#{axis_direction_id},#{ref_direction_id});")
+            cylinder_placement_id = current_id
             bottom_circle_placement_id = current_id
             current_id += 1
 
@@ -606,41 +598,48 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             top_edge_id = current_id
             current_id += 1
 
-            # 8. Create ORIENTED_EDGEs (like #39, #40, #41, #42 in example)
+            # Create ORIENTED_EDGEs with improved vertex tracking
             entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
-            oriented_edge1_id = current_id
+            top_circle_oriented_id = current_id
+            # Track vertices for top circle
+            top_circle_vertices = set()
+            for v1, v2 in component_edges:
+                v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
+                v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                if abs(v1_height - height) < abs(v1_height):
+                    top_circle_vertices.add(v1)
+                if abs(v2_height - height) < abs(v2_height):
+                    top_circle_vertices.add(v2)
+            curved_edge_vertices[top_circle_oriented_id] = top_circle_vertices
             current_id += 1
 
             entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.F.);")
-            oriented_edge2_id = current_id
+            line_oriented_id_1 = current_id
             current_id += 1
 
             entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.F.);")
-            oriented_edge3_id = current_id
+            bottom_circle_oriented_id = current_id
+            # Track vertices for bottom circle
+            bottom_circle_vertices = set()
+            for v1, v2 in component_edges:
+                v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
+                v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                if abs(v1_height) < abs(v1_height - height):
+                    bottom_circle_vertices.add(v1)
+                if abs(v2_height) < abs(v2_height - height):
+                    bottom_circle_vertices.add(v2)
+            curved_edge_vertices[bottom_circle_oriented_id] = bottom_circle_vertices
             current_id += 1
 
             entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.T.);")
-            oriented_edge4_id = current_id
+            line_oriented_id_2 = current_id
             current_id += 1
 
-            for edge_id in [top_edge_id, bottom_edge_id]:
-                arc_vertices = set()
-                for v1, v2 in component_edges:
-                    v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
-                    v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
-                    if edge_id == top_edge_id and abs(v1_height - height) < abs(v1_height):
-                        arc_vertices.add(v1)
-                    if edge_id == top_edge_id and abs(v2_height - height) < abs(v2_height):
-                        arc_vertices.add(v2)
-                    if edge_id == bottom_edge_id and abs(v1_height) < abs(v1_height - height):
-                        arc_vertices.add(v1)
-                    if edge_id == bottom_edge_id and abs(v2_height) < abs(v2_height - height):
-                        arc_vertices.add(v2)
-                curved_edge_vertices[edge_id] = arc_vertices
+            excluded_triangles.update(face_indices)
 
-            # 9. Create EDGE_LOOP (like #108 in example)
-            edge_loop_str = f"#{oriented_edge1_id},#{oriented_edge2_id},#{oriented_edge3_id},#{oriented_edge4_id}"
-            entities.append(f"#{current_id}=EDGE_LOOP('',({edge_loop_str}));")
+            # Create EDGE_LOOP
+            edge_loop_str = f"#{top_circle_oriented_id},#{line_oriented_id_1},#{bottom_circle_oriented_id},#{line_oriented_id_2}"
+            entities.append(f"#{current_id}=EDGE_LOOP('',({edge_loop_str})); /* 1 2 3 4 edge loop */")
             edge_loop_id = current_id
             current_id += 1
 
@@ -664,7 +663,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             top_circle_oriented_id = current_id
             current_id += 1
             
-            entities.append(f"#{current_id}=EDGE_LOOP('',(#{top_circle_oriented_id}));")
+            entities.append(f"#{current_id}=EDGE_LOOP('',(#{top_circle_oriented_id})); /* top circle */")
             top_loop_id = current_id
             current_id += 1
             
@@ -677,21 +676,21 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             top_plane_id = current_id
             current_id += 1
             
-            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{top_bound_id}),#{top_plane_id},.F.);")
+            '''entities.append(f"#{current_id}=ADVANCED_FACE('',(#{top_bound_id}),#{top_plane_id},.F.);")
             all_face_ids.append(current_id)
-            current_id += 1
+            current_id += 1'''
             
             # Create bottom circular face
             entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.T.);")
             bottom_circle_oriented_id = current_id
             current_id += 1
 
-            bottom_vertices = {i for tri in face_indices for i in triangles[tri][:3] 
+            '''bottom_vertices = {i for tri in face_indices for i in triangles[tri][:3] 
                               if abs(np.dot(np.array(vertices[i]) - bottom_center, axis_np)) < 0.001}
 
-            curved_edge_vertices[oriented_edge3_id] = bottom_vertices
+            curved_edge_vertices[oriented_edge3_id] = bottom_vertices'''
             
-            entities.append(f"#{current_id}=EDGE_LOOP('',(#{bottom_circle_oriented_id}));")
+            entities.append(f"#{current_id}=EDGE_LOOP('',(#{bottom_circle_oriented_id})); /* bottom circle */")
             bottom_loop_id = current_id
             current_id += 1
             
@@ -704,9 +703,9 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             bottom_plane_id = current_id
             current_id += 1
             
-            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{bottom_bound_id}),#{bottom_plane_id},.T.);")
+            '''entities.append(f"#{current_id}=ADVANCED_FACE('',(#{bottom_bound_id}),#{bottom_plane_id},.T.);")
             all_face_ids.append(current_id)
-            current_id += 1
+            current_id += 1'''
             
         elif type_name == "partial_cylinder":  # partial cylinder
             print("partial cylinder")
@@ -795,16 +794,9 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 if 'arc' in name:
                     arc_vertices = set()
                     for v1, v2 in component_edges:
-                        v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
-                        v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
-                        if name == 'bottom_arc' and abs(v1_height) < abs(v1_height - height):
-                            arc_vertices.add(v1)
-                        if name == 'bottom_arc' and abs(v2_height) < abs(v2_height - height):
-                            arc_vertices.add(v2)
-                        if name == 'top_arc' and abs(v1_height - height) < abs(v1_height):
-                            arc_vertices.add(v1)
-                        if name == 'top_arc' and abs(v2_height - height) < abs(v2_height):
-                            arc_vertices.add(v2)
+                        if name == 'bottom_arc' or name == 'top_arc':
+                                arc_vertices.add(v1)
+                                arc_vertices.add(v2)
                     curved_edge_vertices[oriented_edge_id] = arc_vertices  # Store with ORIENTED_EDGE ID
                 
                 edge_curve_ids[name] = oriented_edge_id  # Store the ORIENTED_EDGE ID instead
@@ -838,7 +830,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             ]
 
             # Create edge loop directly with existing oriented edges
-            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edges)}));")
+            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edges)})) /* oriented edge loop */;")
             edge_loop_id = current_id
             current_id += 1
             
@@ -896,7 +888,6 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         # Process outer loop
         edge_lookup = {tuple(sorted([v1, v2])): i for i, (v1, v2) in enumerate(edges)}
         outer_oriented_edges = []
-        
         for edge in outer_loop:
             sorted_edge = tuple(sorted(edge))
             edge_idx = edge_lookup[sorted_edge]
@@ -919,11 +910,9 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             for edge_id in outer_oriented_edges:
                 if edge_id in edges_to_replace:
                     vertex_pair = oriented_edges_map[edge_id]
-                    # Find matching curved edge
                     for curved_id, vertices in curved_edge_vertices.items():
-                        vertices = tuple(sorted(vertices))
+                        #vertices = tuple(sorted(vertices))
                         if vertex_pair[0] in vertices and vertex_pair[1] in vertices:
-                            # Only add curved edge if we haven't seen it
                             if curved_id not in seen_curved_edges:
                                 modified_outer_edges.append(curved_id)
                                 seen_curved_edges.add(curved_id)
@@ -932,9 +921,9 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                     modified_outer_edges.append(edge_id)
             
             outer_oriented_edges = modified_outer_edges
-        
+        print("\n final edge loop : ", outer_oriented_edges)
         # Create outer edge loop and bound
-        entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in outer_oriented_edges)}));")
+        entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in outer_oriented_edges)})); /* outer edge */ ")
         outer_loop_id = current_id
         current_id += 1
         
@@ -951,7 +940,10 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 edge_idx = edge_lookup[sorted_edge]
                 orientation = '.T.' if edge == sorted_edge else '.F.'                
                 entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{geometry['edge_curves'][edge_idx]},{orientation});")
+                oriented_edges_map[current_id] = edge if orientation == '.T.' else edge[::-1]
+
                 inner_oriented_edges.append(current_id)
+                
                 current_id += 1
             
             # Look for edges to replace with curves in inner loop
@@ -978,7 +970,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 
                 inner_oriented_edges = modified_inner_edges
             
-            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in inner_oriented_edges)}));")
+            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in inner_oriented_edges)})) /* inner edge loop */;")
             inner_loop_id = current_id
             current_id += 1
             
@@ -1018,6 +1010,7 @@ def get_face_boundaries(vertices, triangles, group_indices, edges):
             if sorted_edge in edge_lookup:  # Only process valid edges
                 boundary_edges[sorted_edge] += 1
                 edge_vertices[sorted_edge] = edge  # Store original orientation
+                edge_vertices[tuple(reversed(sorted_edge))] = tuple(reversed(edge))
     
     # Edges appearing once are boundary edges
     boundary = [edge_vertices[edge] for edge, count in boundary_edges.items() 
@@ -1066,8 +1059,9 @@ def get_face_boundaries(vertices, triangles, group_indices, edges):
         for e in loop:
             if e[0] >= len(vertices) or e[1] >= len(vertices):  # Validate indices
                 continue
-            v1_coords = np.array(vertices[e[0]])
-            v2_coords = np.array(vertices[e[1]])
+            verts = sorted(vertices)
+            v1_coords = np.array(verts[e[0]])
+            v2_coords = np.array(verts[e[1]])
             total_length += np.linalg.norm(v2_coords - v1_coords)
         return total_length
     
