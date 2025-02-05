@@ -151,21 +151,21 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
     return diameter, tuple(center_point), tuple(axis_vector)
 
 def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_tolerance=0.001, normal_tolerance=0.01, max_angle=np.pi/12):
-    # First merge coplanar triangles
-    merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance)
-    
+    print("\n=== Starting Cylindrical Face Detection ===")
     def calculate_triangle_area(v1_idx, v2_idx, v3_idx):
         v1 = np.array(vertices[v1_idx])
         v2 = np.array(vertices[v2_idx])
         v3 = np.array(vertices[v3_idx])
         return 0.5 * np.linalg.norm(np.cross(v2 - v1, v3 - v1))
+    # First merge coplanar triangles
+    merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance)
+    print(f"Found {len(merged_groups)} merged groups")
     
-    # Track edges from triangles
     def get_triangle_edges(triangle):
         v1, v2, v3, _ = triangle
         return {tuple(sorted([v1, v2])), tuple(sorted([v2, v3])), tuple(sorted([v3, v1]))}
-
-    # Calculate areas and normals for merged groups
+    
+    # Calculate areas and edges for merged groups
     merged_faces = []
     for group in merged_groups:
         total_area = sum(calculate_triangle_area(
@@ -175,46 +175,73 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
         ) for idx in group)
         normal = triangles[group[0]][3]
         
-        # Collect all edges from this group
         group_edges = set()
         for idx in group:
-            group_edges.update(get_triangle_edges(triangles[idx]))
+            edges = get_triangle_edges(triangles[idx])
+            group_edges.update(edges)
             
         merged_faces.append((group, total_area, normal, group_edges))
 
-    # Group merged faces by area with tolerance
+    # Group faces by area with tolerance
     area_groups = defaultdict(list)
+    removed_edges = set()
+    
+    # First pass: identify potential cylinder areas (those with many faces)
+    potential_cylinder_areas = set()
     for i, (group, area, normal, edges) in enumerate(merged_faces):
         rounded_area = round(area / area_tolerance) * area_tolerance
         area_groups[rounded_area].append((i, group, normal, edges))
-        print("area groups")
-        print(rounded_area)
-    # Handle split faces
-    small_groups = {area: faces for area, faces in area_groups.items() if len(faces) < 3}
+        if len(area_groups[rounded_area]) >= 3:
+            potential_cylinder_areas.add(rounded_area)
     
-    for small_area, small_faces in small_groups.items():
-        double_area = small_area * 2
-        if double_area in area_groups and len(area_groups[double_area]) >= 3:
-            for small_idx, small_group, small_normal, small_edges in small_faces:
-                for large_idx, large_group, large_normal, large_edges in area_groups[double_area]:
-                    if are_groups_adjacent(small_group, large_group, triangles):
-                        angle = calculate_angle_between_faces(small_normal, large_normal)
+    print("\n=== Analyzing Face Areas ===")
+    for area in sorted(area_groups.keys()):
+        print(f"Area {area:.6f}: {len(area_groups[area])} faces")
+        if area in potential_cylinder_areas:
+            print(f"  - Potential cylinder area")
+    
+    # Second pass: look for split faces that could belong to cylinders
+    print("\n=== Looking for Split Faces ===")
+    for cylinder_area in potential_cylinder_areas:
+        cylinder_faces = area_groups[cylinder_area]
+        cylinder_edges = set()
+        for _, _, _, edges in cylinder_faces:
+            cylinder_edges.update(edges)
+        
+        # Look for small faces that might be part of this cylinder
+        for small_area, small_faces in area_groups.items():
+            if small_area >= cylinder_area or small_area in potential_cylinder_areas:
+                continue
+                
+            for small_idx, small_group, small_normal, small_edges in small_faces[:]:  # Use slice to allow removal
+                # Check if this small face shares edges with cylinder faces
+                if small_edges & cylinder_edges:
+                    print(f"\nFound small face (area={small_area:.6f}) adjacent to cylinder (area={cylinder_area:.6f})")
+                    # Check if normals align
+                    for _, _, cylinder_normal, _ in cylinder_faces:
+                        angle = calculate_angle_between_faces(small_normal, cylinder_normal)
                         if angle < max_angle:
-                            area_groups[double_area].append((small_idx, small_group, small_normal, small_edges))
-                            area_groups[small_area].remove((small_idx, small_group, small_normal, small_edges))
-
-    # Process area groups to find cylindrical components
+                            print(f"  - Normals align (angle={angle:.6f})")
+                            # Add small face to cylinder group
+                            area_groups[cylinder_area].append((small_idx, small_group, small_normal, small_edges))
+                            # Remove from small group
+                            small_faces.remove((small_idx, small_group, small_normal, small_edges))
+                            # Add edges to removed set
+                            removed_edges.update(small_edges)
+                            print(f"  - Added {len(small_edges)} edges to removed set")
+                            break
+    
+    # Now process cylinders with updated groups
     cylindrical_faces = []
     processed = set()
-    removed_edges = set()  # Track all removed edges
-    print("area groups final")
-    print(area_groups)
-    print(area_groups.items())
+    
     for area, group_list in area_groups.items():
         if len(group_list) < 3:
             continue
+                                    
+        print(f"\nProcessing area {area:.6f} with {len(group_list)} faces")
         
-        # Build adjacency graph for merged faces
+        # Build adjacency graph
         adj_graph = defaultdict(list)
         for i, (idx1, group1, normal1, edges1) in enumerate(group_list):
             if idx1 in processed:
@@ -239,10 +266,9 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
             
             component = []
             component_edges = set()
-            remove = set()
             queue = [(start_idx, None)]
             current_edges = []
-
+            
             while queue:
                 current_idx, expected_angle = queue.pop(0)
                 if current_idx in visited:
@@ -250,44 +276,41 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                 
                 visited.add(current_idx)
                 component.append(current_idx)
-                current_face = next(f for i, f, _, _ in group_list if i == current_idx)
                 current_edges = next(e for i, _, _, e in group_list if i == current_idx)
                 component_edges.update(current_edges)
                 
-
                 for neighbor_idx, angle in adj_graph[current_idx]:
                     if neighbor_idx not in visited:
                         if expected_angle is None or abs(angle - expected_angle) < angle_tolerance:
                             queue.append((neighbor_idx, angle))
-
+            
             if len(component) >= 3:
-                # Get all triangle indices and edges in the component
+                print(f"\nFound component with {len(component)} faces")
                 all_triangles = []
                 for comp_idx in component:
                     group_info = next(g for i, g, _, _ in group_list if i == comp_idx)
                     all_triangles.extend(group_info)
                 
-                # Calculate total angle sweep
                 normals = [norm for idx, _, norm, _ in group_list if idx in component]
                 total_angle = sum(calculate_angle_between_faces(normals[i], normals[i+1])
                                 for i in range(len(normals)-1))
                 total_angle += calculate_angle_between_faces(normals[-1], normals[0])
                 
-                # Calculate cylinder properties
+                print(f"Total angle sweep: {total_angle:.6f}")
+                
                 diameter, center, axis = calculate_cylinder_properties(vertices, all_triangles, triangles)
                 
                 if abs(total_angle - 2 * np.pi) < angle_tolerance:
-                    # Complete cylinder - remove all edges
+                    print("Complete cylinder detected!")
+                    print(f"Adding {len(component_edges)} edges to removed set")
                     cylindrical_faces.append(("complete_cylinder", all_triangles, diameter, center, axis, component_edges))
                     removed_edges.update(component_edges)
-                    print("complete")
-                    print(cylindrical_faces)
+                    print(f"Current removed_edges size: {len(removed_edges)}")
                 else:
-                    # Get first and last face indices in component chain
+                    print("Partial cylinder detected")
                     boundary_faces = [component[0], component[-1]]
                     boundary_edges = set()
                     
-                    # Get edges from boundary faces parallel to axis
                     for face_idx in boundary_faces:
                         face_edges = next(e for i, _, _, e in group_list if i == face_idx)
                         for edge in face_edges:
@@ -295,17 +318,21 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                             p1 = np.array(vertices[v1])
                             p2 = np.array(vertices[v2])
                             edge_dir = p2 - p1
-                            # Check if edge is parallel to axis
                             if abs(abs(np.dot(edge_dir, axis)) - np.linalg.norm(edge_dir)) < 0.001:
                                 boundary_edges.add(edge)
                     
-                    # Remove all component edges except boundary edges
                     interior_edges = component_edges - boundary_edges
+                    print(f"Adding {len(interior_edges)} interior edges to removed set")
                     cylindrical_faces.append(("partial_cylinder", all_triangles, diameter, center, axis, component_edges))
-                    print("partial")
-                    print(cylindrical_faces)
                     removed_edges.update(interior_edges)
+                    print(f"Current removed_edges size: {len(removed_edges)}")
+                
                 processed.update(component)
+    
+    print("\n=== Final Statistics ===")
+    print(f"Total cylindrical faces found: {len(cylindrical_faces)}")
+    print(f"Total edges marked for removal: {len(removed_edges)}")
+    
     return cylindrical_faces, removed_edges
 
 def are_groups_adjacent(group1, group2, triangles):
@@ -794,14 +821,26 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 if 'arc' in name:
                     arc_vertices = set()
                     for v1, v2 in component_edges:
-                        if name == 'bottom_arc' or name == 'top_arc':
+                        v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
+                        v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                        
+                        if name == 'bottom_arc':
+                            # Only add vertices that are closer to bottom than top
+                            if abs(v1_height - min_height) < abs(v1_height - max_height):
                                 arc_vertices.add(v1)
+                            if abs(v2_height - min_height) < abs(v2_height - max_height):
                                 arc_vertices.add(v2)
+                        elif name == 'top_arc':
+                            # Only add vertices that are closer to top than bottom
+                            if abs(v1_height - max_height) < abs(v1_height - min_height):
+                                arc_vertices.add(v1)
+                            if abs(v2_height - max_height) < abs(v2_height - min_height):
+                                arc_vertices.add(v2)
+                                
                     curved_edge_vertices[oriented_edge_id] = arc_vertices  # Store with ORIENTED_EDGE ID
-                
+
                 edge_curve_ids[name] = oriented_edge_id  # Store the ORIENTED_EDGE ID instead
-                current_id += 1
-            
+                current_id += 1            
             bottom_vertices = set()
             top_vertices = set()
             for v1, v2 in component_edges:
@@ -905,22 +944,38 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         # Replace straight edges with curved ones in outer loop
         if edges_to_replace:
             seen_curved_edges = set()  # Track which curved edges we've already used
-            modified_outer_edges = []
             
-            for edge_id in outer_oriented_edges:
-                if edge_id in edges_to_replace:
-                    vertex_pair = oriented_edges_map[edge_id]
-                    for curved_id, vertices in curved_edge_vertices.items():
-                        #vertices = tuple(sorted(vertices))
-                        if vertex_pair[0] in vertices and vertex_pair[1] in vertices:
-                            if curved_id not in seen_curved_edges:
+            # Check if we need to replace the entire loop
+            if len(edges_to_replace) == len(outer_oriented_edges):
+                # Find a suitable curved edge that contains all vertices
+                vertex_set = set()
+                for edge_id in outer_oriented_edges:
+                    if edge_id in oriented_edges_map:
+                        vertex_pair = oriented_edges_map[edge_id]
+                        vertex_set.update(vertex_pair)
+                
+                for curved_id, vertices in curved_edge_vertices.items():
+                    if vertex_set.issubset(vertices):
+                        # Found a curved edge that encompasses all vertices
+                        outer_oriented_edges = [curved_id]
+                        break
+            else:
+                # Regular edge-by-edge replacement
+                modified_outer_edges = []
+                for edge_id in outer_oriented_edges:
+                    if edge_id in edges_to_replace:
+                        vertex_pair = oriented_edges_map[edge_id]
+                        for curved_id, vertices in curved_edge_vertices.items():
+                            if (vertex_pair[0] in vertices and 
+                                vertex_pair[1] in vertices and 
+                                curved_id not in seen_curved_edges):
                                 modified_outer_edges.append(curved_id)
                                 seen_curved_edges.add(curved_id)
-                            break
-                else:
-                    modified_outer_edges.append(edge_id)
-            
-            outer_oriented_edges = modified_outer_edges
+                                break
+                    else:
+                        modified_outer_edges.append(edge_id)
+                
+                outer_oriented_edges = modified_outer_edges
         print("\n final edge loop : ", outer_oriented_edges)
         # Create outer edge loop and bound
         entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in outer_oriented_edges)})); /* outer edge */ ")
@@ -1074,31 +1129,34 @@ def get_face_boundaries(vertices, triangles, group_indices, edges):
 def analyze_edge_loop_simple(edge_loop_str, edges_to_remove, edge_lookup, geometry, oriented_edges_map):
     """Analyze which edges in an edge loop should be replaced with curves."""
     print("\nAnalyzing edge loop:", edge_loop_str)
-    print("Edges we want to remove:", edges_to_remove)
     
     # Parse edge loop string to get IDs
     edge_ids = [int(x.strip('(#)')) for x in edge_loop_str.strip("'{}").split(',')]
     print("Edge IDs in loop:", edge_ids)
     
-    edges_to_replace = []
-    
-    # Check if this is a single-edge loop (indicates a circle)
+    # If there's only one edge and it's a complete circle (same start/end point),
+    # this is already a complete cylinder edge - don't modify it
     if len(edge_ids) == 1:
-        return []  # Don't modify circular loops
-    
-    # For each ORIENTED_EDGE in the loop
-    for edge_id in edge_ids:
-        # Get the vertex pair from our oriented_edges_map
+        return []
+        
+    # Look for complete cylinder edges in the loop
+    # These will have equal start and end points
+    '''    for edge_id in edge_ids:
         if edge_id in oriented_edges_map:
             vertex_pair = oriented_edges_map[edge_id]
-            print(f"\nChecking oriented edge ID {edge_id} with vertex pair {vertex_pair}")
-            
-            # Check if this vertex pair should be removed
+            if vertex_pair[0] == vertex_pair[1]:  # Same start and end point
+                # This is a complete cylinder - it should be the only edge in the loop
+                print(f"Found complete cylinder edge {edge_id}, replacing entire loop")
+                # Return all other edges for removal
+                return [eid for eid in edge_ids if eid != edge_id]'''
+    
+    # If no complete cylinder found, proceed with normal edge replacement
+    edges_to_replace = []
+    for edge_id in edge_ids:
+        if edge_id in oriented_edges_map:
+            vertex_pair = oriented_edges_map[edge_id]
             if vertex_pair in edges_to_remove or vertex_pair[::-1] in edges_to_remove:
-                print(f"Edge {edge_id} should be replaced (vertices {vertex_pair})")
                 edges_to_replace.append(edge_id)
-        else:
-            print(f"Warning: Edge ID {edge_id} not found in oriented_edges_map")
     
     print("\nEdges to replace:", edges_to_replace)
     return edges_to_replace
