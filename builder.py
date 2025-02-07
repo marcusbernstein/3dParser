@@ -160,10 +160,13 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
         v3 = np.array(vertices[v3_idx])
         return 0.5 * np.linalg.norm(np.cross(v2 - v1, v3 - v1))
 
-    # Track edges from triangles
     def get_triangle_edges(triangle):
-        v1, v2, v3, _  = triangle
+        v1, v2, v3, _ = triangle
         return {tuple(sorted([v1, v2])), tuple(sorted([v2, v3])), tuple(sorted([v3, v1]))}
+
+    def is_close_area(a1, a2, rtol=1e-2):
+        return abs(a1 - a2) <= rtol * max(abs(a1), abs(a2))
+
     # Calculate areas and normals for merged groups
     merged_faces = []
     for group in merged_groups:
@@ -174,106 +177,187 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
         ) for idx in group)
         normal = triangles[group[0]][3]
 
-        # Collect all edges from this group
         group_edges = set()
         for idx in group:
             group_edges.update(get_triangle_edges(triangles[idx]))
 
         merged_faces.append((group, total_area, normal, group_edges))
+
     # Group merged faces by area with tolerance
     area_groups = defaultdict(list)
     for i, (group, area, normal, edges) in enumerate(merged_faces):
         rounded_area = round(area / area_tolerance) * area_tolerance
         area_groups[rounded_area].append((i, group, normal, edges))
-        print("area groups")
-        print(rounded_area)
-    test_groups = area_groups
-    # Handle split faces
-    small_groups = {area: faces for area, faces in area_groups.items() if len(faces) < 3}
+        print(f"Found face with area: {rounded_area:.3f}")
 
+    # Handle split faces first
+    updated_area_groups = defaultdict(list)
+    small_groups = {area: faces for area, faces in area_groups.items() if len(faces) < 3}
+    split_pairs = {}
+    split_face_connections = {}
+
+    # First, copy all existing groups to updated groups
+    for area, faces in area_groups.items():
+        if area not in small_groups:
+            updated_area_groups[area].extend(faces)
+
+    # Then process split faces
     for small_area, small_faces in small_groups.items():
-        double_area = round((round(small_area / area_tolerance) * area_tolerance * 2),2)
-        if double_area in area_groups and len(area_groups[double_area]) >= 3:
-            for small_idx, small_group, small_normal, small_edges in small_faces:
-                for large_idx, large_group, large_normal, large_edges in area_groups[double_area]:
-                    if are_groups_adjacent(small_group, large_group, triangles):
-                        angle = calculate_angle_between_faces(small_normal, large_normal)
-                        if angle < max_angle:
-                            area_groups[double_area].append((small_idx, small_group, small_normal, small_edges))
-                            area_groups[small_area].remove((small_idx, small_group, small_normal, small_edges))
-    # Process area groups to find cylindrical components
+        print(f"\nChecking small area: {small_area:.3f}")
+        double_area = small_area * 2
+        print(f"Looking for matching larger area close to: {double_area:.3f}")
+        print(f"Available areas: {sorted(area_groups.keys())}")
+
+        # Find matching larger area group with tolerance
+        matching_area = None
+        for large_area in area_groups.keys():
+            if is_close_area(large_area, double_area) and len(area_groups[large_area]) >= 3:
+                matching_area = large_area
+                print(f"Found matching larger area: {large_area:.3f}")
+                break
+
+        if matching_area and len(small_faces) == 2:
+            face1_idx, face1_group, normal1, edges1 = small_faces[0]
+            face2_idx, face2_group, normal2, edges2 = small_faces[1]
+            split_pairs[face1_idx] = face2_idx
+            split_pairs[face2_idx] = face1_idx
+
+            # Add split faces to the larger area group
+            updated_area_groups[matching_area].extend([
+                (face1_idx, face1_group, normal1, edges1),
+                (face2_idx, face2_group, normal2, edges2)
+            ])
+            print(f"Added split faces {face1_idx} and {face2_idx} to area {matching_area}")
+
+            # Find connections to large faces
+            for large_idx, large_group, large_normal, large_edges in area_groups[matching_area]:
+                if are_groups_adjacent(face1_group, large_group, triangles):
+                    if face1_idx not in split_face_connections:
+                        split_face_connections[face1_idx] = set()
+                    split_face_connections[face1_idx].add(large_idx)
+                if are_groups_adjacent(face2_group, large_group, triangles):
+                    if face2_idx not in split_face_connections:
+                        split_face_connections[face2_idx] = set()
+                    split_face_connections[face2_idx].add(large_idx)
+
+            print(f"Found split pair: {face1_idx} and {face2_idx}")
+            print(f"Face {face1_idx} connects to: {split_face_connections.get(face1_idx, set())}")
+            print(f"Face {face2_idx} connects to: {split_face_connections.get(face2_idx, set())}")
+        else:
+            # If not a split pair or no matching area, copy to updated groups
+            updated_area_groups[small_area].extend(small_faces)
+
+    # Debug the updated groups
+    print("\nUpdated area groups:")
+    for area, faces in updated_area_groups.items():
+        print(f"Area {area:.3f}: {len(faces)} faces")
+        print(f"Face indices: {[idx for idx, _, _, _ in faces]}")
+
+    # Process updated area groups to find cylindrical components
     cylindrical_faces = []
     processed = set()
-    removed_edges = set()  # Track all removed edges
-    
-    for area, group_list in area_groups.items():
+    removed_edges = set()
+
+    for area, group_list in updated_area_groups.items():
         if len(group_list) < 3:
             continue
-            
-        # Build adjacency graph
+
+        print(f"\nProcessing area group {area:.3f} with {len(group_list)} faces")
+        face_indices = {idx for idx, _, _, _ in group_list}
+
+        # Build adjacency graph with enhanced connectivity for split faces
         adj_graph = defaultdict(list)
         for i, (idx1, group1, normal1, edges1) in enumerate(group_list):
             if idx1 in processed:
                 continue
-            
+
             for j, (idx2, group2, normal2, edges2) in enumerate(group_list[i+1:], i+1):
                 if idx2 in processed:
                     continue
-                
+
+                # Enhanced connectivity check
+                is_adjacent = False
                 if are_groups_adjacent(group1, group2, triangles):
+                    is_adjacent = True
+                elif idx1 in split_pairs and idx2 in split_face_connections.get(idx1, set()):
+                    is_adjacent = True
+                elif idx2 in split_pairs and idx1 in split_face_connections.get(idx2, set()):
+                    is_adjacent = True
+                elif idx1 in split_pairs and idx2 in split_pairs:
+                    # Connect split faces if they're part of the same cylinder
+                    if split_face_connections.get(idx1, set()) & split_face_connections.get(idx2, set()):
+                        is_adjacent = True
+
+                if is_adjacent:
                     angle = calculate_angle_between_faces(normal1, normal2)
-                    if angle > max_angle:
-                        continue
-                    adj_graph[idx1].append((idx2, angle))
-                    adj_graph[idx2].append((idx1, angle))
-        
+                    if angle <= max_angle:
+                        adj_graph[idx1].append((idx2, angle))
+                        adj_graph[idx2].append((idx1, angle))
+
         # Find connected components
         visited = set()
         for start_idx, start_group, _, start_edges in group_list:
             if start_idx in visited or start_idx in processed:
                 continue
-            
+
             component = []
             component_edges = set()
             queue = [(start_idx, None)]
-            
+
             while queue:
                 current_idx, expected_angle = queue.pop(0)
                 if current_idx in visited:
                     continue
-                
+
                 visited.add(current_idx)
                 component.append(current_idx)
                 current_edges = next(e for i, _, _, e in group_list if i == current_idx)
                 component_edges.update(current_edges)
-                
+
+                # If this is a split face, immediately include its pair
+                if current_idx in split_pairs:
+                    pair_idx = split_pairs[current_idx]
+                    if pair_idx in face_indices and pair_idx not in visited:
+                        visited.add(pair_idx)
+                        component.append(pair_idx)
+                        pair_edges = next(e for i, _, _, e in group_list if i == pair_idx)
+                        component_edges.update(pair_edges)
+
+                # Process neighbors
                 for neighbor_idx, angle in adj_graph[current_idx]:
                     if neighbor_idx not in visited:
                         if expected_angle is None or abs(angle - expected_angle) < angle_tolerance:
                             queue.append((neighbor_idx, angle))
-            
+
             if len(component) >= 3:
+                print(f"\nFound component with {len(component)} faces")
+                print(f"Component faces: {sorted(component)}")
+                print(f"Component edges: {len(component_edges)}")
+
                 # Get all triangles
                 all_triangles = []
                 for comp_idx in component:
                     group_info = next(g for i, g, _, _ in group_list if i == comp_idx)
                     all_triangles.extend(group_info)
-                
+
                 # Calculate total angle
                 normals = [norm for idx, _, norm, _ in group_list if idx in component]
                 total_angle = sum(calculate_angle_between_faces(normals[i], normals[i+1])
                                 for i in range(len(normals)-1))
                 total_angle += calculate_angle_between_faces(normals[-1], normals[0])
-                
+
                 diameter, center, axis = calculate_cylinder_properties(vertices, all_triangles, triangles)
-                
+
                 if abs(total_angle - 2 * np.pi) < angle_tolerance:
+                    print(f"Detected complete cylinder!")
+                    print(f"Total angle: {total_angle}")
+                    print(f"Adding {len(component_edges)} edges to removal set")
                     cylindrical_faces.append(("complete_cylinder", all_triangles, diameter, center, axis, component_edges))
                     removed_edges.update(component_edges)
                 else:
                     boundary_faces = [component[0], component[-1]]
                     boundary_edges = set()
-                    
+
                     # Identify boundary edges parallel to axis
                     for face_idx in boundary_faces:
                         face_edges = next(e for i, _, _, e in group_list if i == face_idx)
@@ -284,14 +368,15 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                             edge_dir = p2 - p1
                             if abs(abs(np.dot(edge_dir, axis)) - np.linalg.norm(edge_dir)) < 0.001:
                                 boundary_edges.add(edge)
-                    
+
                     interior_edges = component_edges - boundary_edges
+                    print(f"Adding {len(interior_edges)} interior edges and {len(boundary_edges)} boundary edges to removal set")
                     removed_edges.update(interior_edges)
                     removed_edges.update(boundary_edges)
                     cylindrical_faces.append(("partial_cylinder", all_triangles, diameter, center, axis, component_edges))
-                
+
                 processed.update(component)
-    
+
     return cylindrical_faces, removed_edges
 
 def are_groups_adjacent(group1, group2, triangles):
