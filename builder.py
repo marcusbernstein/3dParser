@@ -43,8 +43,9 @@ def get_perpendicular_vectors(normal):
     perp1 = perp1 / np.linalg.norm(perp1)
     
     # Second perpendicular vector
+    perp1 = np.array([float(f"{x:.4f}") for x in perp1/np.linalg.norm(perp1)])
     perp2 = np.cross(normal, perp1)
-    perp2 = perp2 / np.linalg.norm(perp2)
+    perp2 = np.array([float(f"{x:.4f}") for x in perp2/np.linalg.norm(perp2)])
     
     return tuple(perp1), tuple(perp2)
 def merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.01):
@@ -122,7 +123,7 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
     proj_normals = face_normals - np.outer(np.dot(face_normals, axis_vector), axis_vector)
     proj_normals = np.array([n/np.linalg.norm(n) if np.linalg.norm(n) > 1e-10 else n for n in proj_normals])
     
-    # Find center by intersecting normal lines
+    # Find center by intersecting normal lines - THIS IS YOUR ORIGINAL APPROACH
     center_point = np.zeros(3)
     count = 0
     for i in range(len(proj_centers)):
@@ -130,7 +131,6 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
             n1, n2 = proj_normals[i], proj_normals[j]
             p1, p2 = proj_centers[i], proj_centers[j]
             
-            # Solve for intersection of lines p1 + t1*n1 = p2 + t2*n2
             A = np.column_stack([n1, -n2])
             if np.linalg.matrix_rank(A) == 2:
                 b = p2 - p1
@@ -144,9 +144,21 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
     else:
         center_point = np.mean(proj_centers, axis=0)
     
-    # Calculate diameter using distance from center to projected points
-    radii = np.linalg.norm(proj_centers - center_point, axis=1)
-    diameter = 2 * np.mean(radii)
+    # Now find boundary points and adjust diameter to reach them
+    start_angle, end_angle, start_point, end_point = find_cylinder_boundaries(
+        vertices, triangles, face_indices, axis_vector, center_point
+    )
+    
+    # Project boundary points to plane perpendicular to axis
+    start_proj = start_point - np.dot(start_point - center_point, axis_vector) * axis_vector
+    end_proj = end_point - np.dot(end_point - center_point, axis_vector) * axis_vector
+    
+    # Calculate radius needed to reach both points
+    start_radius = np.linalg.norm(start_proj - center_point)
+    end_radius = np.linalg.norm(end_proj - center_point)
+    
+    # Use maximum radius needed to reach boundary points
+    diameter = 2 * max(start_radius, end_radius)
     
     return diameter, tuple(center_point), tuple(axis_vector)
 
@@ -465,7 +477,7 @@ def generate_partial_cylinder(vertices, triangles, face_indices, diameter, cente
     
     axis = np.array(axis)
     center = np.array(center)
-    radius = diameter / 2
+    radius = diameter/2  # Calculate once and reuse
     
     points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
     heights = np.dot(points - center, axis)
@@ -473,12 +485,13 @@ def generate_partial_cylinder(vertices, triangles, face_indices, diameter, cente
     max_height = np.max(heights)
     height = max_height - min_height
     
-    ref_dir = np.array(get_perpendicular_vectors(axis)[0])  # Convert to numpy array
+    ref_dir = np.array(get_perpendicular_vectors(axis)[0])
     cross_dir = np.cross(axis, ref_dir)
     
     bottom_center = center + min_height * axis
     top_center = center + max_height * axis
     
+    # Calculate points using consistent radius and directions
     start_bottom = bottom_center + radius * (
         ref_dir * np.cos(start_angle) + 
         cross_dir * np.sin(start_angle)
@@ -488,10 +501,11 @@ def generate_partial_cylinder(vertices, triangles, face_indices, diameter, cente
         cross_dir * np.sin(end_angle)
     )
     
+    # Use exact same height for top points
     start_top = start_bottom + height * axis
     end_top = end_bottom + height * axis
     
-    return start_bottom, end_bottom, start_top, end_top
+    return tuple(start_bottom), tuple(end_bottom), tuple(start_top), tuple(end_top)
 
 def generate_step_entities(vertices, edges, triangles, start_id=100):
     entities = []
@@ -514,7 +528,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
 
     # Generate base points and vertices
     for i, (x, y, z) in enumerate(vertices):
-        entities.append(f"#{current_id}=CARTESIAN_POINT('',({x:.6f},{y:.6f},{z:.6f}));")
+        entities.append(f"#{current_id}=CARTESIAN_POINT('',({x:.4f},{y:.4f},{z:.4f}));")
         geometry['cartesian_points'][i] = current_id
         current_id += 1
         
@@ -531,7 +545,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         direction_tuple = tuple(direction)
         
         if direction_tuple not in geometry['directions']:
-            entities.append(f"#{current_id}=DIRECTION('',({direction[0]:.6f},{direction[1]:.6f},{direction[2]:.6f}));")
+            entities.append(f"#{current_id}=DIRECTION('',({direction[0]:.4f},{direction[1]:.4f},{direction[2]:.4f}));")
             geometry['directions'][direction_tuple] = current_id
             current_id += 1
         
@@ -591,30 +605,30 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
 
             # 1. Create all CARTESIAN_POINTs
             # Center point for cylindrical surface (like #214 in example)
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.6f},{bottom_center[1]:.6f},{bottom_center[2]:.6f}));")
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.4f},{bottom_center[1]:.4f},{bottom_center[2]:.4f}));")
             surface_origin_id = current_id
             bottom_center_id = current_id
             current_id += 1
 
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.6f},{top_center[1]:.6f},{top_center[2]:.6f}));")
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.4f},{top_center[1]:.4f},{top_center[2]:.4f}));")
             top_center_id = current_id
             current_id += 1
 
             # Points for vertices
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_point[0]:.6f},{bottom_point[1]:.6f},{bottom_point[2]:.6f}));")
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_point[0]:.4f},{bottom_point[1]:.4f},{bottom_point[2]:.4f}));")
             bottom_point_id = current_id
             current_id += 1
 
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_point[0]:.6f},{top_point[1]:.6f},{top_point[2]:.6f}));")
+            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_point[0]:.4f},{top_point[1]:.4f},{top_point[2]:.4f}));")
             top_point_id = current_id
             current_id += 1
 
             # 2. Create DIRECTIONs (following example #176, #177)
-            entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.6f},{axis[1]:.6f},{axis[2]:.6f}));")
+            entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.4f},{axis[1]:.4f},{axis[2]:.4f}));")
             axis_direction_id = current_id
             current_id += 1
 
-            entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.6f},{ref_dir[1]:.6f},{ref_dir[2]:.6f}));")
+            entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.4f},{ref_dir[1]:.4f},{ref_dir[2]:.4f}));")
             ref_direction_id = current_id
             current_id += 1
 
@@ -638,17 +652,17 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             current_id += 1
 
             # 5. Create CIRCLEs (like #20, #21 in example)
-            entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{radius:.6f});")
+            entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{radius:.4f});")
             bottom_circle_id = current_id
             current_id += 1
 
-            entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{radius:.6f});")
+            entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{radius:.4f});")
             top_circle_id = current_id
             current_id += 1
 
             # 6. Create LINE between points (like #81, #89 in example)
             # Create vector for the line direction
-            entities.append(f"#{current_id}=VECTOR('',#{axis_direction_id},{height:.6f});")
+            entities.append(f"#{current_id}=VECTOR('',#{axis_direction_id},{height:.4f});")
             line_vector_id = current_id
             current_id += 1
 
@@ -720,7 +734,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             current_id += 1
 
             # 11. Create CYLINDRICAL_SURFACE (like #22 in example)
-            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{radius:.6f});")
+            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{radius:.4f});")
             surface_id = current_id
             current_id += 1
 
@@ -793,14 +807,14 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 ('start_top', start_top),
                 ('end_top', end_top)
             ]:
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.6f},{point[1]:.6f},{point[2]:.6f}));")
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.4f},{point[1]:.4f},{point[2]:.4f}));")
                 point_ids[name] = current_id
                 current_id += 1
             
             # Create directions
             direction_ids = {}
             for name, dir_vector in [('axis', axis), ('ref', ref_dir)]:
-                entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.6f},{dir_vector[1]:.6f},{dir_vector[2]:.6f}));")
+                entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.4f},{dir_vector[1]:.4f},{dir_vector[2]:.4f}));")
                 direction_ids[name] = current_id
                 current_id += 1
             
@@ -820,16 +834,16 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 current_id += 1
             
             # Create circles
-            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom']},{radius:.6f});")
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom']},{radius:.4f});")
             bottom_circle_id = current_id
             current_id += 1
             
-            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top']},{radius:.6f});")
+            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top']},{radius:.4f});")
             top_circle_id = current_id
             current_id += 1
             
             # Create vectors and lines for vertical edges
-            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.6f});")
+            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.4f});")
             line_vector_id = current_id
             current_id += 1
             
@@ -909,10 +923,10 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             
             # Now process each curve with known connections
             curve_mappings = {
-                'start_line': (vertex_ids['start_bottom'], vertex_ids['start_top'], line_ids['start']),
-                'bottom_arc': (vertex_ids['start_bottom'], vertex_ids['end_bottom'], bottom_circle_id),
-                'end_line': (vertex_ids['end_bottom'], vertex_ids['end_top'], line_ids['end']),
-                'top_arc': (vertex_ids['start_top'], vertex_ids['end_top'], top_circle_id)  # Changed order here
+                'start_line': (vertex_ids['start_bottom'], vertex_ids['start_top'], line_ids['start'],'.T.'),
+                'bottom_arc': (vertex_ids['start_bottom'], vertex_ids['end_bottom'], bottom_circle_id,'.F.'),
+                'end_line': (vertex_ids['end_bottom'], vertex_ids['end_top'], line_ids['end'],'.F.'),
+                'top_arc': (vertex_ids['start_top'], vertex_ids['end_top'], top_circle_id,'.T.')  # Changed order here
             }
 
             edge_curve_ids = {}
@@ -921,7 +935,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             curve_order = ['start_line', 'bottom_arc', 'end_line', 'top_arc']
             
             for name in curve_order:
-                start_vertex, end_vertex, curve = curve_mappings[name]
+                start_vertex, end_vertex, curve, orientation = curve_mappings[name]
                 
                 # Create EDGE_CURVE
                 entities.append(f"#{current_id}=EDGE_CURVE('',#{start_vertex},#{end_vertex},#{curve},.T.);")
@@ -929,7 +943,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 current_id += 1
                 
                 # Create ORIENTED_EDGE
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_curve_id},.T.);")
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_curve_id},{orientation});")
                 oriented_edge_id = current_id
                 current_id += 1
                 
@@ -978,7 +992,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             current_id += 1
             
             # Create cylindrical surface
-            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['top']},{radius:.6f});")
+            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['top']},{radius:.4f});")
             surface_id = current_id
             current_id += 1
             
@@ -1001,7 +1015,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         # Create normal direction
         normal_tuple = tuple(normal)
         if normal_tuple not in geometry['directions']:
-            entities.append(f"#{current_id}=DIRECTION('',({normal[0]:.6f},{normal[1]:.6f},{normal[2]:.6f}));")
+            entities.append(f"#{current_id}=DIRECTION('',({normal[0]:.4f},{normal[1]:.4f},{normal[2]:.4f}));")
             geometry['directions'][normal_tuple] = current_id
             current_id += 1
         
@@ -1009,7 +1023,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         perp1, _ = get_perpendicular_vectors(normal)
         perp_tuple = tuple(perp1)
         if perp_tuple not in geometry['directions']:
-            entities.append(f"#{current_id}=DIRECTION('',({perp1[0]:.6f},{perp1[1]:.6f},{perp1[2]:.6f}));")
+            entities.append(f"#{current_id}=DIRECTION('',({perp1[0]:.4f},{perp1[1]:.4f},{perp1[2]:.4f}));")
             geometry['directions'][perp_tuple] = current_id
             current_id += 1
         
