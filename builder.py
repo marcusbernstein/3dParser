@@ -369,8 +369,8 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                 diameter, center, axis = calculate_cylinder_properties(vertices, all_triangles, triangles)
                 print(f"Total angle: {total_angle}")
 
-                #if abs(total_angle - 2 * np.pi) < angle_tolerance:
-                if abs(total_angle) > 2 * np.pi - angle_tolerance:
+                if False:
+                #if abs(total_angle) > 2 * np.pi - angle_tolerance:
                     print(f"Detected complete cylinder!")
                     print(f"Total angle: {total_angle}")
                     print(f"Adding {len(component_edges)} edges to removal set")
@@ -379,25 +379,24 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                 else:
                     boundary_faces = [component[0], component[-1]]
                     boundary_edges = set()
-
                     # Identify boundary edges parallel to axis
                     for face_idx in boundary_faces:
                         face_edges = next(e for i, _, _, e in group_list if i == face_idx)
                         for edge in face_edges:
                             v1, v2 = edge
-                            p1 = np.array(vertices[v1])
-                            p2 = np.array(vertices[v2])
+                            p1 = np.array(vertices[v2])
+                            p2 = np.array(vertices[v1])
                             edge_dir = p2 - p1
-                            if abs(abs(np.dot(edge_dir, axis)) - np.linalg.norm(edge_dir)) < 0.001:
+                            if abs(abs(np.dot(edge_dir, axis)) - abs(np.linalg.norm(edge_dir))) < 0.001:
+                                print(f"found boundary edge: id {edge} w/ v1 {v1} v2 {v2} dir {edge_dir}")
                                 boundary_edges.add(edge)
-
                     interior_edges = component_edges - boundary_edges
                     print(f"Adding {len(interior_edges)} interior edges and {len(boundary_edges)} boundary edges to removal set")
                     removed_edges.update(interior_edges)
-                    removed_edges.update(boundary_edges)
+                    #removed_edges.update(boundary_edges)
                     cylindrical_faces.append(("partial_cylinder", all_triangles, diameter, center, axis, component_edges))
-
-                processed.update(component)
+                    
+                    processed.update(component)
 
     return cylindrical_faces, removed_edges
 
@@ -586,16 +585,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         axis_np = np.array(axis)
         ref_dir = np.array(get_perpendicular_vectors(axis)[0])
         radius = diameter/2
-        
-        ref_dir = np.array(get_perpendicular_vectors(axis)[0])
-        # Fixes corrupt partial cylinders Flip ref_dir if points in wrong direction
-        first_vertex = np.array(vertices[triangles[face_indices[0]][0]]) - center_np
-        first_proj = first_vertex - np.dot(first_vertex, axis_np) * axis_np
-        if np.dot(first_proj, ref_dir) >= 0:
-            print("FLIPPED!")
-            print(ref_dir)
-            ref_dir = -ref_dir
-            print(ref_dir)
+        # Reverse vertex order for consistent winding
         
         # Get height bounds
         points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
@@ -774,7 +764,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             current_id += 1
 
             # 12. Create ADVANCED_FACE (like #128 in example)
-            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.) /* complete cylinder */;")
             all_face_ids.append(current_id)
             current_id += 1
             
@@ -968,27 +958,109 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 np.dot(np.array(vertices[v]) - bottom_center, ref_dir),
                 np.dot(np.array(vertices[v]) - bottom_center, np.cross(axis_np, ref_dir))
             ))
-            
-            # Sort top vertices by angle around axis
             top_verts = list(arc_vertices['top'])
             top_verts.sort(key=lambda v: np.arctan2(
                 np.dot(np.array(vertices[v]) - top_center, ref_dir),
                 np.dot(np.array(vertices[v]) - top_center, np.cross(axis_np, ref_dir))
             ))
-            
-            # Get start and end connections - REVERSED from previous version
-            end_bottom = bottom_verts[0]
-            start_bottom = bottom_verts[-1]
-            
-            # For start connection, find the top vertex closest to end of top arc
+                      
+            bottom_angles = []
+            for v in arc_vertices['bottom']:
+                point = np.array(vertices[v]) - bottom_center
+                point_proj = point - np.dot(point, axis_np) * axis_np
+                angle = np.arctan2(
+                    np.dot(point_proj, np.cross(axis_np, ref_dir)),
+                    np.dot(point_proj, ref_dir)
+                )
+                if angle < 0:
+                    angle += 2 * np.pi
+                bottom_angles.append((v, angle))
+
+            # Sort by angle and find largest gap
+            bottom_angles.sort(key=lambda x: x[1])
+            max_gap = 0
+            gap_idx = 0
+
+            for i in range(len(bottom_angles)):
+                angle1 = bottom_angles[i][1]
+                angle2 = bottom_angles[(i + 1) % len(bottom_angles)][1]
+                if angle2 < angle1:
+                    angle2 += 2 * np.pi
+                gap = angle2 - angle1
+                if gap > max_gap:
+                    max_gap = gap
+                    gap_idx = i
+
+            # The vertex after the largest gap is the start, the vertex before is the end
+            start_bottom = bottom_angles[(gap_idx + 1) % len(bottom_angles)][0]
+            end_bottom = bottom_angles[gap_idx][0]
+
+            print(f"\nAngle analysis:")
+            print(f"Max gap: {max_gap * 180/np.pi:.2f} degrees")
+            print(f"Start bottom vertex: {start_bottom}")
+            print(f"End bottom vertex: {end_bottom}")
+
+            # Find corresponding top vertices using existing bottom_to_top mapping
             start_top_candidates = bottom_to_top[start_bottom]
-            start_top = max(start_top_candidates, key=lambda v: top_verts.index(v))
-            start_connection = {start_bottom, start_top}
-            
-            # For end connection, find the top vertex closest to start of top arc
             end_top_candidates = bottom_to_top[end_bottom]
-            end_top = min(end_top_candidates, key=lambda v: top_verts.index(v))
+
+            # Calculate angle for start bottom vertex
+            point_start_bottom = np.array(vertices[start_bottom]) - bottom_center
+            proj_start_bottom = point_start_bottom - np.dot(point_start_bottom, axis_np) * axis_np
+            start_bottom_angle = np.arctan2(
+                np.dot(proj_start_bottom, np.cross(axis_np, ref_dir)),
+                np.dot(proj_start_bottom, ref_dir)
+            )
+            if start_bottom_angle < 0:
+                start_bottom_angle += 2 * np.pi
+
+            # Find matching start top vertex
+            start_top_angles = []
+            for candidate in start_top_candidates:
+                point = np.array(vertices[candidate]) - top_center
+                proj = point - np.dot(point, axis_np) * axis_np
+                angle = np.arctan2(
+                    np.dot(proj, np.cross(axis_np, ref_dir)),
+                    np.dot(proj, ref_dir)
+                )
+                if angle < 0:
+                    angle += 2 * np.pi
+                start_top_angles.append((candidate, abs(angle - start_bottom_angle)))
+
+            start_top = min(start_top_angles, key=lambda x: x[1])[0]
+
+            # Calculate angle for end bottom vertex
+            point_end_bottom = np.array(vertices[end_bottom]) - bottom_center
+            proj_end_bottom = point_end_bottom - np.dot(point_end_bottom, axis_np) * axis_np
+            end_bottom_angle = np.arctan2(
+                np.dot(proj_end_bottom, np.cross(axis_np, ref_dir)),
+                np.dot(proj_end_bottom, ref_dir)
+            )
+            if end_bottom_angle < 0:
+                end_bottom_angle += 2 * np.pi
+
+            # Find matching end top vertex
+            end_top_angles = []
+            for candidate in end_top_candidates:
+                point = np.array(vertices[candidate]) - top_center
+                proj = point - np.dot(point, axis_np) * axis_np
+                angle = np.arctan2(
+                    np.dot(proj, np.cross(axis_np, ref_dir)),
+                    np.dot(proj, ref_dir)
+                )
+                if angle < 0:
+                    angle += 2 * np.pi
+                end_top_angles.append((candidate, abs(angle - end_bottom_angle)))
+
+            end_top = min(end_top_angles, key=lambda x: x[1])[0]
+
+            # Define connections using the matched vertices
+            start_connection = {start_bottom, start_top}
             end_connection = {end_bottom, end_top}
+
+            print(f"\nFound connections:")
+            print(f"Start connection: {start_connection}")
+            print(f"End connection: {end_connection}")
             
             print(f"Refined start connection: {start_connection}")
             print(f"Refined end connection: {end_connection}")
@@ -1030,6 +1102,8 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 elif name == 'end_line':
                     vertices_for_edge = end_connection
                     removed_edges.add(tuple(sorted(vertices_for_edge)))
+                else:
+                    print("not quite right")
                 
                 curved_edge_vertices[oriented_edge_id] = vertices_for_edge
                 oriented_edges_map[oriented_edge_id] = tuple(sorted(vertices_for_edge))
@@ -1069,7 +1143,7 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
             current_id += 1
             
             # Create advanced face
-            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.);")
+            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.) /* partial cylinder */;")
             all_face_ids.append(current_id)
             current_id += 1
     vertices_list = list(vertices) if isinstance(vertices, set) else vertices
@@ -1157,16 +1231,18 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                 for edge_id in outer_oriented_edges:
                     if edge_id in edges_to_replace:
                         vertex_pair = oriented_edges_map[edge_id]
+                        #print(f"curved edge vertices {curved_edge_vertices}")
                         for curved_id, vertices in curved_edge_vertices.items():
-                            if (vertex_pair[0] in vertices and 
-                                vertex_pair[1] in vertices and 
-                                curved_id not in seen_curved_edges):
-                                modified_outer_edges.append(curved_id)
-                                seen_curved_edges.add(curved_id)
-                                break
+                            #print(f"evaluating {vertex_pair} against {vertices}")
+                            if (vertex_pair[0] in vertices and vertex_pair[1] in vertices): 
+                                if curved_id not in seen_curved_edges:
+                                    modified_outer_edges.append(curved_id)
+                                    print(f"appended {curved_id} for {edge_id} based on {vertex_pair[0]},{vertex_pair[1]}")
+                                    seen_curved_edges.add(curved_id)
+                                    break
                     else:
                         modified_outer_edges.append(edge_id)
-                
+                        
                 outer_oriented_edges = modified_outer_edges
         print("\n final edge loop : ", outer_oriented_edges)
         # Create outer edge loop and bound
@@ -1231,11 +1307,12 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
                         if edge_id in edges_to_replace:
                             vertex_pair = oriented_edges_map[edge_id]
                             for curved_id, vertices in curved_edge_vertices.items():
-                                if vertex_pair[0] in vertices and vertex_pair[1] in vertices:
-                                    if curved_id not in seen_curved_edges:
-                                        modified_inner_edges.append(curved_id)
-                                        seen_curved_edges.add(curved_id)
-                                        break
+                                if (vertex_pair[0] in vertices and 
+                                vertex_pair[1] in vertices and 
+                                curved_id not in seen_curved_edges):
+                                    modified_inner_edges.append(curved_id)
+                                    seen_curved_edges.add(curved_id)
+                                    break
                         else:
                             modified_inner_edges.append(edge_id)
                     
@@ -1291,10 +1368,11 @@ def get_face_boundaries(vertices, triangles, group_indices, edges):
             edge_vertices[tuple(reversed(sorted_edge))] = tuple(reversed(edge))
     
     # Get boundary edges (those appearing once)
-    boundary = [edge_vertices[edge] for edge, count in boundary_edges.items() 
-               if count == 1]
+    boundary = [edge_vertices[edge] for edge, count in boundary_edges.items() if count == 1]
     
     print(f"Found {len(boundary)} boundary edges")
+    print(f"Found {boundary} boundary edges")
+
     
     if not boundary:
         return [], []
