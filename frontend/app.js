@@ -6,8 +6,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const downloadLink = document.getElementById('download-link');
   
   // Replace with your HTTP API URL
-  const apiEndpoint = 'https://vjfui8m7s6.execute-api.us-east-2.amazonaws.com';
-  
+  const apiEndpoint = 'https://vjfui8m7s6.execute-api.us-east-2.amazonaws.com/default';
   uploadButton.addEventListener('click', function() {
     if (!fileInput.files.length) {
       statusDiv.innerHTML = "Please select a file first";
