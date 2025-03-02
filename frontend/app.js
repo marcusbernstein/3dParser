@@ -1,3 +1,7 @@
+// In your app.js
+const apiEndpoint = process.env.API_ENDPOINT || '';
+const bucketName = process.env.S3_BUCKET_NAME || '';
+
 document.addEventListener('DOMContentLoaded', function() {
   const fileInput = document.getElementById('file-input');
   const uploadButton = document.getElementById('upload-button');
