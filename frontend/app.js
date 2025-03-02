@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
   const downloadLink = document.getElementById('download-link');
   
   // Replace with your HTTP API URL
-  const apiEndpoint = 'https://your-api-id.execute-api.region.amazonaws.com';
+  const apiEndpoint = 'https://vjfui8m7s6.execute-api.us-east-2.amazonaws.com';
   
   uploadButton.addEventListener('click', function() {
     if (!fileInput.files.length) {
