@@ -120,4 +120,4 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log("Starting to read file as Data URL");
     reader.readAsDataURL(file);
   });
-  
+});
