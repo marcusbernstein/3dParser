@@ -36,7 +36,6 @@ def print_timing_summary():
         print(f"{func_name}: {total:.4f}s total, {avg:.4f}s avg, {calls} calls")
     print("=========================\n")
 
-@log_time
 def get_perpendicular_vectors(normal):
     normal = np.array(normal)
     # First perpendicular vector using cross product with (0,0,1) or (1,0,0)
@@ -54,8 +53,7 @@ def get_perpendicular_vectors(normal):
     return tuple(perp1), tuple(perp2)
 
 @log_time
-def merge_coplanar_triangles(vertices, triangles, normal_tolerance=0.01):
-    
+def merge_coplanar_triangles(vertices, triangles, normal_tolerance):
     def are_normals_equal(n1, n2):
         return np.allclose(n1, n2, rtol=normal_tolerance)
     
@@ -126,7 +124,6 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
             axis_vector += cross
     axis_vector = axis_vector / np.linalg.norm(axis_vector)
     
-    # ===== START OF CHANGE =====
     # Cache dot products for projections
     centers_offset = face_centers - face_centers[0]
     centers_dots = np.dot(centers_offset, axis_vector)
@@ -135,11 +132,9 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
     # Project centers and normals using cached dot products
     proj_centers = face_centers - np.outer(centers_dots, axis_vector)
     proj_normals = face_normals - np.outer(normals_dots, axis_vector)
-    # ===== END OF CHANGE =====
     
     proj_normals = np.array([n/np.linalg.norm(n) if np.linalg.norm(n) > 1e-10 else n for n in proj_normals])
     
-    # Find center by intersecting normal lines - THIS IS YOUR ORIGINAL APPROACH
     center_point = np.zeros(3)
     count = 0
     for i in range(len(proj_centers)):
@@ -185,7 +180,7 @@ def calculate_cylinder_properties(vertices, face_indices, triangles):
     return diameter, tuple(center_point), tuple(axis_vector)
 
 @log_time
-def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_tolerance=0.01, normal_tolerance=0.01, max_angle=np.pi/12):
+def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.00001, area_tolerance=0.1, normal_tolerance=0.001, max_angle=np.pi/12):
     # First merge coplanar triangles
     merged_groups = merge_coplanar_triangles(vertices, triangles, normal_tolerance)
 
@@ -199,7 +194,7 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
         v1, v2, v3, _ = triangle
         return {tuple(sorted([v1, v2])), tuple(sorted([v2, v3])), tuple(sorted([v3, v1]))}
 
-    def is_close_area(a1, a2, rtol=1e-4):
+    def is_close_area(a1, a2):
         #return abs(a1 - a2) <= rtol * max(abs(a1), abs(a2))
         return abs(a1 - a2) <= .1
 
@@ -273,13 +268,11 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
             # If not a split pair or no matching area, copy to updated groups
             updated_area_groups[small_area].extend(small_faces)
 
-    # ===== START OF CHANGE =====
     # Filter groups early - store only groups with 3 or more faces
     filtered_area_groups = {}
     for area, group_list in updated_area_groups.items():
-        if len(group_list) >= 3:  # Only include groups with 3+ faces
+        if len(group_list) > 3:  # Only include groups with 3+ faces
             filtered_area_groups[area] = group_list
-    # ===== END OF CHANGE =====
 
     # Process updated area groups to find cylindrical components
     cylindrical_faces = []
@@ -321,9 +314,9 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                     # Connect split faces if they're part of the same cylinder
                     if split_face_connections.get(idx1, set()) & split_face_connections.get(idx2, set()):
                         is_adjacent = True
-
                 if is_adjacent:
                     angle = calculate_angle_between_faces(normal1, normal2)
+                    print(f"angle: {angle}")
                     if abs(angle) <= abs(max_angle):
                         adj_graph[idx1].append((idx2, angle))
                         adj_graph[idx2].append((idx1, angle))
@@ -384,13 +377,13 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                 normals = [norm for idx, _, norm, _ in group_list if idx in component]
                 total_angle = sum(calculate_angle_between_faces(normals[i], normals[i+1])
                                 for i in range(len(normals)-1))
+                print(f"circle with Total angle: {total_angle}")
                 total_angle += calculate_angle_between_faces(normals[-1], normals[0])
 
                 diameter, center, axis = calculate_cylinder_properties(vertices, all_triangles, triangles)
-                #print(f"Total angle: {total_angle}")
+                print(f"circle with Total angle: {total_angle}")
 
-                if False:
-                #if abs(total_angle) > 2 * np.pi - angle_tolerance:
+                if abs(total_angle) > 2 * np.pi - angle_tolerance and abs(total_angle) < 2 * np.pi + angle_tolerance:
                     #print(f"Detected complete cylinder!")
                     #print(f"Total angle: {total_angle}")
                     #print(f"Adding {len(component_edges)} edges to removal set")
@@ -418,7 +411,7 @@ def detect_cylindrical_faces(vertices, triangles, angle_tolerance=0.001, area_to
                     
                     processed.update(component)
 
-    return cylindrical_faces, removed_edges
+    return cylindrical_faces, removed_edges, merged_groups
 
 def are_groups_adjacent(group1, group2, triangles):
     for idx1 in group1:
@@ -508,39 +501,44 @@ def find_cylinder_boundaries(vertices, triangles, face_indices, axis, center):
 
 @log_time
 def generate_partial_cylinder(vertices, triangles, face_indices, diameter, center, axis):
-    start_angle, end_angle, start_point, end_point = find_cylinder_boundaries(
-        vertices, triangles, face_indices, axis, center
-    )
+    axis_np = np.array(axis)
+    center_np = np.array(center)
     
-    axis = np.array(axis)
-    center = np.array(center)
-    radius = diameter/2  # Calculate once and reuse
+    # Get boundary information directly from find_cylinder_boundaries
+    _, _, start_point, end_point = find_cylinder_boundaries(
+        vertices, triangles, face_indices, axis, center)
     
-    points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
-    heights = np.dot(points - center, axis)
+    # Convert boundary points to numpy arrays
+    start_point_np = np.array(start_point)
+    end_point_np = np.array(end_point)
+    
+    # Calculate height bounds along axis
+    all_vertices = []
+    for idx in face_indices:
+        v1, v2, v3, _ = triangles[idx]
+        all_vertices.extend([vertices[v1], vertices[v2], vertices[v3]])
+    
+    all_vertices = np.array(all_vertices)
+    heights = np.dot(all_vertices - center_np, axis_np)
     min_height = np.min(heights)
     max_height = np.max(heights)
-    height = max_height - min_height
     
-    ref_dir = np.array(get_perpendicular_vectors(axis)[0])
-    cross_dir = np.cross(axis, ref_dir)
+    # Determine the radial position of the boundary points
+    # by projecting onto plane perpendicular to axis
+    start_height = np.dot(start_point_np - center_np, axis_np)
+    end_height = np.dot(end_point_np - center_np, axis_np)
     
-    bottom_center = center + min_height * axis
-    top_center = center + max_height * axis
+    # Project the points to get their position relative to axis
+    start_radial = start_point_np - center_np - start_height * axis_np
+    end_radial = end_point_np - center_np - end_height * axis_np
     
-    # Calculate points using consistent radius and directions
-    start_bottom = bottom_center + radius * (
-        ref_dir * np.cos(start_angle) + 
-        cross_dir * np.sin(start_angle)
-    )
-    end_bottom = bottom_center + radius * (
-        ref_dir * np.cos(end_angle) + 
-        cross_dir * np.sin(end_angle)
-    )
+    # Generate the corner points at min_height (bottom)
+    start_bottom = center_np + min_height * axis_np + start_radial
+    end_bottom = center_np + min_height * axis_np + end_radial
     
-    # Use exact same height for top points
-    start_top = start_bottom + height * axis
-    end_top = end_bottom + height * axis
+    # Generate the corner points at max_height (top)
+    start_top = center_np + max_height * axis_np + start_radial
+    end_top = center_np + max_height * axis_np + end_radial
     
     return tuple(start_bottom), tuple(end_bottom), tuple(start_top), tuple(end_top)
 
@@ -600,587 +598,518 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
         current_id += 1
     
     # Collect all geometry before creating faces
-    cylinder_faces, removed_edges = detect_cylindrical_faces(vertices, triangles)
+    cylinder_faces, removed_edges, merged_groups = detect_cylindrical_faces(vertices, triangles)
     excluded_triangles = set()
+    successfully_processed_cylinders = []
+
     for _, face_indices, _, _, _, _ in cylinder_faces:
         excluded_triangles.update(face_indices)
     #print("found cylinderss qty: ")
     #print(len(cylinder_faces))
     # Process cylindrical faces
     for type_name, face_indices, diameter, center, axis, component_edges in cylinder_faces:
-        #print("component edges")
-        #print(component_edges)
-        center_np = np.array(center)
-        axis_np = np.array(axis)
-        ref_dir = np.array(get_perpendicular_vectors(axis)[0])
-        radius = diameter/2
-        # Reverse vertex order for consistent winding
-        
-        # Get height bounds
-        points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
-        heights = np.dot(points - center_np, axis_np)
-        min_height = np.min(heights)
-        max_height = np.max(heights)
-        height = max_height - min_height
-        
-        bottom_center = center_np + min_height * axis_np
-        top_center = center_np + max_height * axis_np
-        
-        if type_name == "complete_cylinder":
-            #print("complete cylinder ID")
+        try:
+            #print("component edges")
+            #print(component_edges)
+            center_np = np.array(center)
+            axis_np = np.array(axis)
+            ref_dir = np.array(get_perpendicular_vectors(axis)[0])
             radius = diameter/2
-            bottom_point = bottom_center + radius * np.array(ref_dir)
-            top_point = top_center + radius * np.array(ref_dir)
+            # Reverse vertex order for consistent winding
+            
+            # Get height bounds
+            points = np.array([vertices[i] for tri in face_indices for i in triangles[tri][:3]])
+            heights = np.dot(points - center_np, axis_np)
+            min_height = np.min(heights)
+            max_height = np.max(heights)
+            height = max_height - min_height
+            
+            bottom_center = center_np + min_height * axis_np
+            top_center = center_np + max_height * axis_np
+            
+            if type_name == "complete_cylinder":
+                #print("complete cylinder ID")
+                radius = diameter/2
+                bottom_point = bottom_center + radius * np.array(ref_dir)
+                top_point = top_center + radius * np.array(ref_dir)
 
-            # 1. Create all CARTESIAN_POINTs
-            # Center point for cylindrical surface (like #214 in example)
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.4f},{bottom_center[1]:.4f},{bottom_center[2]:.4f}));")
-            surface_origin_id = current_id
-            bottom_center_id = current_id
-            current_id += 1
+                # 1. Create all CARTESIAN_POINTs
+                # Center point for cylindrical surface (like #214 in example)
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_center[0]:.4f},{bottom_center[1]:.4f},{bottom_center[2]:.4f}));")
+                surface_origin_id = current_id
+                bottom_center_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.4f},{top_center[1]:.4f},{top_center[2]:.4f}));")
-            top_center_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_center[0]:.4f},{top_center[1]:.4f},{top_center[2]:.4f}));")
+                top_center_id = current_id
+                current_id += 1
 
-            # Points for vertices
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_point[0]:.4f},{bottom_point[1]:.4f},{bottom_point[2]:.4f}));")
-            bottom_point_id = current_id
-            current_id += 1
+                # Points for vertices
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({bottom_point[0]:.4f},{bottom_point[1]:.4f},{bottom_point[2]:.4f}));")
+                bottom_point_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_point[0]:.4f},{top_point[1]:.4f},{top_point[2]:.4f}));")
-            top_point_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=CARTESIAN_POINT('',({top_point[0]:.4f},{top_point[1]:.4f},{top_point[2]:.4f}));")
+                top_point_id = current_id
+                current_id += 1
 
-            # 2. Create DIRECTIONs (following example #176, #177)
-            entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.4f},{axis[1]:.4f},{axis[2]:.4f}));")
-            axis_direction_id = current_id
-            current_id += 1
+                # 2. Create DIRECTIONs (following example #176, #177)
+                entities.append(f"#{current_id}=DIRECTION('',({axis[0]:.4f},{axis[1]:.4f},{axis[2]:.4f}));")
+                axis_direction_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.4f},{ref_dir[1]:.4f},{ref_dir[2]:.4f}));")
-            ref_direction_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=DIRECTION('',({ref_dir[0]:.4f},{ref_dir[1]:.4f},{ref_dir[2]:.4f}));")
+                ref_direction_id = current_id
+                current_id += 1
 
-            # 3. Create VERTEX_POINTs (like #69, #71, #76, #77 in example)
-            entities.append(f"#{current_id}=VERTEX_POINT('',#{bottom_point_id});")
-            bottom_vertex_id = current_id
-            current_id += 1
+                # 3. Create VERTEX_POINTs (like #69, #71, #76, #77 in example)
+                entities.append(f"#{current_id}=VERTEX_POINT('',#{bottom_point_id});")
+                bottom_vertex_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=VERTEX_POINT('',#{top_point_id});")
-            top_vertex_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=VERTEX_POINT('',#{top_point_id});")
+                top_vertex_id = current_id
+                current_id += 1
 
-            # Create placements for circles (separate for top and bottom)
-            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{bottom_center_id},#{axis_direction_id},#{ref_direction_id});")
-            cylinder_placement_id = current_id
-            bottom_circle_placement_id = current_id
-            current_id += 1
+                # Create placements for circles (separate for top and bottom)
+                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{bottom_center_id},#{axis_direction_id},#{ref_direction_id});")
+                cylinder_placement_id = current_id
+                bottom_circle_placement_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{top_center_id},#{axis_direction_id},#{ref_direction_id});")
-            top_circle_placement_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{top_center_id},#{axis_direction_id},#{ref_direction_id});")
+                top_circle_placement_id = current_id
+                current_id += 1
 
-            # 5. Create CIRCLEs (like #20, #21 in example)
-            entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{radius:.4f});")
-            bottom_circle_id = current_id
-            current_id += 1
+                # 5. Create CIRCLEs (like #20, #21 in example)
+                entities.append(f"#{current_id}=CIRCLE('',#{bottom_circle_placement_id},{radius:.4f});")
+                bottom_circle_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{radius:.4f});")
-            top_circle_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=CIRCLE('',#{top_circle_placement_id},{radius:.4f});")
+                top_circle_id = current_id
+                current_id += 1
 
-            # 6. Create LINE between points (like #81, #89 in example)
-            # Create vector for the line direction
-            entities.append(f"#{current_id}=VECTOR('',#{axis_direction_id},{height:.4f});")
-            line_vector_id = current_id
-            current_id += 1
+                # 6. Create LINE between points (like #81, #89 in example)
+                # Create vector for the line direction
+                entities.append(f"#{current_id}=VECTOR('',#{axis_direction_id},{height:.4f});")
+                line_vector_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=LINE('',#{bottom_point_id},#{line_vector_id});")
-            line_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=LINE('',#{bottom_point_id},#{line_vector_id});")
+                line_id = current_id
+                current_id += 1
 
-            # 7. Create EDGE_CURVEs (like #56, #64, #66, #67 in example)
-            entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{top_vertex_id},#{line_id},.T.);")
-            line_edge_id = current_id
-            current_id += 1
+                # 7. Create EDGE_CURVEs (like #56, #64, #66, #67 in example)
+                entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{top_vertex_id},#{line_id},.T.);")
+                line_edge_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{bottom_vertex_id},#{bottom_circle_id},.T.);")
-            bottom_edge_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=EDGE_CURVE('',#{bottom_vertex_id},#{bottom_vertex_id},#{bottom_circle_id},.T.);")
+                bottom_edge_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=EDGE_CURVE('',#{top_vertex_id},#{top_vertex_id},#{top_circle_id},.T.);")
-            top_edge_id = current_id
-            current_id += 1
+                entities.append(f"#{current_id}=EDGE_CURVE('',#{top_vertex_id},#{top_vertex_id},#{top_circle_id},.T.);")
+                top_edge_id = current_id
+                current_id += 1
 
-            # Create ORIENTED_EDGEs with improved vertex tracking
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
-            top_circle_oriented_id = current_id
-            # Track vertices for top circle
-            top_circle_vertices = set()
-            for v1, v2 in component_edges:
-                v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
-                v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                # Create ORIENTED_EDGEs with improved vertex tracking
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
+                top_circle_oriented_id = current_id
+                # Track vertices for top circle
+                top_circle_vertices = set()
+                for v1, v2 in component_edges:
+                    v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
+                    v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                    
+                    # Calculate distances to top and bottom planes
+                    v1_to_top = abs(v1_height - height)
+                    v1_to_bottom = abs(v1_height)
+                    v2_to_top = abs(v2_height - height)
+                    v2_to_bottom = abs(v2_height)
+                    
+                    # Compare distances directly
+                    if v1_to_top < v1_to_bottom:
+                        top_circle_vertices.add(v1)
+                    if v2_to_top < v2_to_bottom:
+                        top_circle_vertices.add(v2)
                 
-                # Calculate distances to top and bottom planes
-                v1_to_top = abs(v1_height - height)
-                v1_to_bottom = abs(v1_height)
-                v2_to_top = abs(v2_height - height)
-                v2_to_bottom = abs(v2_height)
+                curved_edge_vertices[top_circle_oriented_id] = top_circle_vertices
+                current_id += 1
+
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.F.);")
+                line_oriented_id_1 = current_id
+                current_id += 1
+
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.F.);")
+                bottom_circle_oriented_id = current_id
                 
-                # Compare distances directly
-                if v1_to_top < v1_to_bottom:
-                    top_circle_vertices.add(v1)
-                if v2_to_top < v2_to_bottom:
-                    top_circle_vertices.add(v2)
-            
-            curved_edge_vertices[top_circle_oriented_id] = top_circle_vertices
-            current_id += 1
-
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.F.);")
-            line_oriented_id_1 = current_id
-            current_id += 1
-
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.F.);")
-            bottom_circle_oriented_id = current_id
-            
-            # Fixed bottom circle vertex collection
-            bottom_circle_vertices = set()
-            for v1, v2 in component_edges:
-                v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
-                v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                # Fixed bottom circle vertex collection
+                bottom_circle_vertices = set()
+                for v1, v2 in component_edges:
+                    v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
+                    v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                    
+                    # Calculate distances to top and bottom planes
+                    v1_to_top = abs(v1_height - height)
+                    v1_to_bottom = abs(v1_height)
+                    v2_to_top = abs(v2_height - height)
+                    v2_to_bottom = abs(v2_height)
+                    
+                    # Compare distances directly
+                    if v1_to_bottom < v1_to_top:
+                        bottom_circle_vertices.add(v1)
+                    if v2_to_bottom < v2_to_top:
+                        bottom_circle_vertices.add(v2)
                 
-                # Calculate distances to top and bottom planes
-                v1_to_top = abs(v1_height - height)
-                v1_to_bottom = abs(v1_height)
-                v2_to_top = abs(v2_height - height)
-                v2_to_bottom = abs(v2_height)
+                curved_edge_vertices[bottom_circle_oriented_id] = bottom_circle_vertices
+                current_id += 1
+
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.T.);")
+                line_oriented_id_2 = current_id
+                current_id += 1
+
+                # Add debug output
+                #print("\nVertex Classification Results:")
+                #print(f"Top circle vertices: {len(top_circle_vertices)}")
+                #print(f"Bottom circle vertices: {len(bottom_circle_vertices)}")
+                #print(f"Overlapping vertices: {len(top_circle_vertices & bottom_circle_vertices)}")
+
+                excluded_triangles.update(face_indices)
+
+                # Create EDGE_LOOP
+                edge_loop_str = f"#{top_circle_oriented_id},#{line_oriented_id_1},#{bottom_circle_oriented_id},#{line_oriented_id_2}"
+                entities.append(f"#{current_id}=EDGE_LOOP('',({edge_loop_str})); /* 1 2 3 4 edge loop */")
+                edge_loop_id = current_id
+                current_id += 1
+
+                # 10. Create FACE_BOUND (like #115 in example)
+                entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
+                face_bound_id = current_id
+                current_id += 1
+
+                # 11. Create CYLINDRICAL_SURFACE (like #22 in example)
+                entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{radius:.4f});")
+                surface_id = current_id
+                current_id += 1
+
+                # 12. Create ADVANCED_FACE (like #128 in example)
+                entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.) /* complete cylinder */;")
+                all_face_ids.append(current_id)
+                current_id += 1
                 
-                # Compare distances directly
-                if v1_to_bottom < v1_to_top:
-                    bottom_circle_vertices.add(v1)
-                if v2_to_bottom < v2_to_top:
-                    bottom_circle_vertices.add(v2)
-            
-            curved_edge_vertices[bottom_circle_oriented_id] = bottom_circle_vertices
-            current_id += 1
+                # Create top circular face
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
+                top_circle_oriented_id = current_id
+                current_id += 1
+                
+                entities.append(f"#{current_id}=EDGE_LOOP('',(#{top_circle_oriented_id})); /* top circle */")
+                top_loop_id = current_id
+                current_id += 1
+                
+                entities.append(f"#{current_id}=FACE_BOUND('',#{top_loop_id},.T.);")
+                top_bound_id = current_id
+                current_id += 1
+                
+                # Create plane for top face
+                entities.append(f"#{current_id}=PLANE('',#{top_circle_placement_id});")
+                top_plane_id = current_id
+                current_id += 1
+                
+                '''entities.append(f"#{current_id}=ADVANCED_FACE('',(#{top_bound_id}),#{top_plane_id},.F.);")
+                all_face_ids.append(current_id)
+                current_id += 1'''
+                
+                # Create bottom circular face
+                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.T.);")
+                bottom_circle_oriented_id = current_id
+                current_id += 1
 
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{line_edge_id},.T.);")
-            line_oriented_id_2 = current_id
-            current_id += 1
+                '''bottom_vertices = {i for tri in face_indices for i in triangles[tri][:3] 
+                                  if abs(np.dot(np.array(vertices[i]) - bottom_center, axis_np)) < 0.001}
 
-            # Add debug output
-            #print("\nVertex Classification Results:")
-            #print(f"Top circle vertices: {len(top_circle_vertices)}")
-            #print(f"Bottom circle vertices: {len(bottom_circle_vertices)}")
-            #print(f"Overlapping vertices: {len(top_circle_vertices & bottom_circle_vertices)}")
+                curved_edge_vertices[oriented_edge3_id] = bottom_vertices'''
+                
+                entities.append(f"#{current_id}=EDGE_LOOP('',(#{bottom_circle_oriented_id})); /* bottom circle */")
+                bottom_loop_id = current_id
+                current_id += 1
+                
+                entities.append(f"#{current_id}=FACE_BOUND('',#{bottom_loop_id},.T.);")
+                bottom_bound_id = current_id
+                current_id += 1
+                
+                # Create plane for bottom face
+                entities.append(f"#{current_id}=PLANE('',#{bottom_circle_placement_id});")
+                bottom_plane_id = current_id
+                current_id += 1
+                
+                '''entities.append(f"#{current_id}=ADVANCED_FACE('',(#{bottom_bound_id}),#{bottom_plane_id},.T.);")
+                all_face_ids.append(current_id)
+                current_id += 1'''
+            
+                
+            elif type_name == "partial_cylinder":  # partial cylinder
+                #print("partial cylinder")
+                start_bottom, end_bottom, start_top, end_top = generate_partial_cylinder(
+                    vertices, triangles, face_indices, diameter, center, axis)
+                
+                point_ids = {}
+                for name, point in [
+                    ('surface_origin', bottom_center),
+                    ('bottom_center', bottom_center),
+                    ('top_center', top_center),
+                    ('start_bottom', start_bottom),
+                    ('end_bottom', end_bottom),
+                    ('start_top', start_top),
+                    ('end_top', end_top)
+                ]:
+                    entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.4f},{point[1]:.4f},{point[2]:.4f}));")
+                    point_ids[name] = current_id
+                    current_id += 1
+                
+                # Create directions
+                direction_ids = {}
+                for name, dir_vector in [('axis', axis), ('ref', ref_dir)]:
+                    entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.4f},{dir_vector[1]:.4f},{dir_vector[2]:.4f}));")
+                    direction_ids[name] = current_id
+                    current_id += 1
+                
+                # Create vertex points
+                vertex_ids = {}
+                for name in ['start_bottom', 'end_bottom', 'start_top', 'end_top']:
+                    entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids[name]});")
+                    vertex_ids[name] = current_id
+                    current_id += 1
+                
+                # Create placements
+                placement_ids = {}
+                for name in ['bottom', 'top']:
+                    center_id = point_ids[f'{name}_center']
+                    entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{center_id},#{direction_ids['axis']},#{direction_ids['ref']});")
+                    placement_ids[name] = current_id
+                    current_id += 1
+                
+                # Create circles
+                entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom']},{radius:.4f});")
+                bottom_circle_id = current_id
+                current_id += 1
+                
+                entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top']},{radius:.4f});")
+                top_circle_id = current_id
+                current_id += 1
+                
+                # Create vectors and lines for vertical edges
+                entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.4f});")
+                line_vector_id = current_id
+                current_id += 1
+                
+                line_ids = {}
+                for name in ['start', 'end']:
+                    entities.append(f"#{current_id}=LINE('',#{point_ids[f'{name}_bottom']},#{line_vector_id});")
+                    line_ids[name] = current_id
+                    current_id += 1
+                
+                # Define curve mappings - following the reference code structure
+                #print("\nDEBUG: Vertex Classification")
+                #print(f"Min height: {min_height:.4f}")
+                #print(f"Max height: {max_height:.4f}")
+                #print(f"Height range: {max_height - min_height:.4f}")
+                
+                vertex_heights = []
+                for v1, v2 in component_edges:
+                    v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
+                    v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
+                    vertex_heights.extend([v1_height, v2_height])
+                
+                vertex_heights.sort()
+                #print("\nVertex height distribution:")
+                #print(f"Min vertex height: {vertex_heights[0]:.4f}")
+                #print(f"Max vertex height: {vertex_heights[-1]:.4f}")
+                #print(f"Number of unique heights: {len(set([round(h, 4) for h in vertex_heights]))}")
+                #print(f"First few heights: {[f'{h:.4f}' for h in vertex_heights[:5]]}")
+                #print(f"Last few heights: {[f'{h:.4f}' for h in vertex_heights[-5:]]}")
 
-            excluded_triangles.update(face_indices)
+                # Classify vertices
+                # Find closest vertices in the model to these geometric points
+                def find_closest_vertex(point):
+                    point_np = np.array(point)
+                    min_dist = float('inf')
+                    closest_idx = None
+                    
+                    for i, v in enumerate(vertices):
+                        dist = np.linalg.norm(np.array(v) - point_np)
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_idx = i
+                    
+                    return closest_idx
 
-            # Create EDGE_LOOP
-            edge_loop_str = f"#{top_circle_oriented_id},#{line_oriented_id_1},#{bottom_circle_oriented_id},#{line_oriented_id_2}"
-            entities.append(f"#{current_id}=EDGE_LOOP('',({edge_loop_str})); /* 1 2 3 4 edge loop */")
-            edge_loop_id = current_id
-            current_id += 1
+                # Get actual vertex indices corresponding to our corner points
+                def find_closest_vertex(point):
+                    point_np = np.array(point)
+                    min_dist = float('inf')
+                    closest_idx = None
+                    
+                    for i, v in enumerate(vertices):
+                        dist = np.linalg.norm(np.array(v) - point_np)
+                        if dist < min_dist:
+                            min_dist = dist
+                            closest_idx = i
+                    
+                    return closest_idx
 
-            # 10. Create FACE_BOUND (like #115 in example)
-            entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
-            face_bound_id = current_id
-            current_id += 1
+                # Get actual vertex indices corresponding to our corner points
+                start_bottom_idx = find_closest_vertex(start_bottom)
+                end_bottom_idx = find_closest_vertex(end_bottom)
+                start_top_idx = find_closest_vertex(start_top)
+                end_top_idx = find_closest_vertex(end_top)
 
-            # 11. Create CYLINDRICAL_SURFACE (like #22 in example)
-            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{cylinder_placement_id},{radius:.4f});")
-            surface_id = current_id
-            current_id += 1
+                # Define connections directly
+                start_connection = {start_bottom_idx, start_top_idx}
+                end_connection = {end_bottom_idx, end_top_idx}
 
-            # 12. Create ADVANCED_FACE (like #128 in example)
-            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.) /* complete cylinder */;")
-            all_face_ids.append(current_id)
-            current_id += 1
-            
-            # Create top circular face
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{top_edge_id},.T.);")
-            top_circle_oriented_id = current_id
-            current_id += 1
-            
-            entities.append(f"#{current_id}=EDGE_LOOP('',(#{top_circle_oriented_id})); /* top circle */")
-            top_loop_id = current_id
-            current_id += 1
-            
-            entities.append(f"#{current_id}=FACE_BOUND('',#{top_loop_id},.T.);")
-            top_bound_id = current_id
-            current_id += 1
-            
-            # Create plane for top face
-            entities.append(f"#{current_id}=PLANE('',#{top_circle_placement_id});")
-            top_plane_id = current_id
-            current_id += 1
-            
-            '''entities.append(f"#{current_id}=ADVANCED_FACE('',(#{top_bound_id}),#{top_plane_id},.F.);")
-            all_face_ids.append(current_id)
-            current_id += 1'''
-            
-            # Create bottom circular face
-            entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{bottom_edge_id},.T.);")
-            bottom_circle_oriented_id = current_id
-            current_id += 1
+                # Initialize vertex classification dictionary
+                arc_vertices = {'bottom': set(), 'top': set()}
 
-            '''bottom_vertices = {i for tri in face_indices for i in triangles[tri][:3] 
-                              if abs(np.dot(np.array(vertices[i]) - bottom_center, axis_np)) < 0.001}
+                # Classify vertices by height
+                axis_np = np.array(axis)
+                center_np = np.array(center)
+                bottom_center = center_np + min_height * axis_np
+                top_center = center_np + max_height * axis_np
 
-            curved_edge_vertices[oriented_edge3_id] = bottom_vertices'''
-            
-            entities.append(f"#{current_id}=EDGE_LOOP('',(#{bottom_circle_oriented_id})); /* bottom circle */")
-            bottom_loop_id = current_id
-            current_id += 1
-            
-            entities.append(f"#{current_id}=FACE_BOUND('',#{bottom_loop_id},.T.);")
-            bottom_bound_id = current_id
-            current_id += 1
-            
-            # Create plane for bottom face
-            entities.append(f"#{current_id}=PLANE('',#{bottom_circle_placement_id});")
-            bottom_plane_id = current_id
-            current_id += 1
-            
-            '''entities.append(f"#{current_id}=ADVANCED_FACE('',(#{bottom_bound_id}),#{bottom_plane_id},.T.);")
-            all_face_ids.append(current_id)
-            current_id += 1'''
+                # Calculate height thresholds (25% from top and bottom)
+                height_range = max_height - min_height
+                bottom_threshold = min_height + height_range * 0.25
+                top_threshold = max_height - height_range * 0.25
+
+                # Collect all vertices from component edges
+                for v1, v2 in component_edges:
+                    v1_height = np.dot(np.array(vertices[v1]) - center_np, axis_np)
+                    v2_height = np.dot(np.array(vertices[v2]) - center_np, axis_np)
+                    
+                    # Classify by height
+                    if v1_height <= bottom_threshold:
+                        arc_vertices['bottom'].add(v1)
+                    elif v1_height > top_threshold:
+                        arc_vertices['top'].add(v1)
+                        
+                    if v2_height <= bottom_threshold:
+                        arc_vertices['bottom'].add(v2)
+                    elif v2_height > top_threshold:
+                        arc_vertices['top'].add(v2)
+
+                # Make sure corner points are included
+                arc_vertices['bottom'].add(start_bottom_idx)
+                arc_vertices['bottom'].add(end_bottom_idx)
+                arc_vertices['top'].add(start_top_idx)
+                arc_vertices['top'].add(end_top_idx)
+
+                #print(f"\nFound connections:")
+                #print(f"Start connection: {start_connection}")
+                #print(f"End connection: {end_connection}")
+                
+                #print(f"Refined start connection: {start_connection}")
+                #print(f"Refined end connection: {end_connection}")
+                
+                # Now process each curve with known connections
+                curve_mappings = {
+                    'start_line': (vertex_ids['start_bottom'], vertex_ids['start_top'], line_ids['start'],'.T.'),
+                    'bottom_arc': (vertex_ids['start_bottom'], vertex_ids['end_bottom'], bottom_circle_id,'.F.'),
+                    'end_line': (vertex_ids['end_bottom'], vertex_ids['end_top'], line_ids['end'],'.F.'),
+                    'top_arc': (vertex_ids['start_top'], vertex_ids['end_top'], top_circle_id,'.T.')  # Changed order here
+                }
+
+                edge_curve_ids = {}
+                
+                # Process in specific order to maintain ID sequence
+                curve_order = ['start_line', 'bottom_arc', 'end_line', 'top_arc']
+                
+                for name in curve_order:
+                    start_vertex, end_vertex, curve, orientation = curve_mappings[name]
+                    
+                    # Create EDGE_CURVE
+                    entities.append(f"#{current_id}=EDGE_CURVE('',#{start_vertex},#{end_vertex},#{curve},.T.);")
+                    edge_curve_id = current_id
+                    current_id += 1
+                    
+                    # Create ORIENTED_EDGE
+                    entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_curve_id},{orientation});")
+                    oriented_edge_id = current_id
+                    current_id += 1
+                    
+                    # Assign vertices based on edge type
+                    if name == 'bottom_arc':
+                        vertices_for_edge = arc_vertices['bottom']
+                    elif name == 'top_arc':
+                        vertices_for_edge = arc_vertices['top']
+                    elif name == 'start_line':
+                        vertices_for_edge = start_connection
+                        removed_edges.add(tuple(sorted(vertices_for_edge)))
+                    elif name == 'end_line':
+                        vertices_for_edge = end_connection
+                        removed_edges.add(tuple(sorted(vertices_for_edge)))
+                    #else:
+                        #print("not quite right")
+                    
+                    '''curved_edge_vertices[oriented_edge_id] = vertices_for_edge
+                    oriented_edges_map[oriented_edge_id] = tuple(sorted(vertices_for_edge))
+                    edge_curve_ids[name] = oriented_edge_id'''
+                    
+                    curved_edge_vertices[oriented_edge_id] = vertices_for_edge
+                    oriented_edges_map[oriented_edge_id] = tuple(sorted(vertices_for_edge))
+                    edge_curve_ids[name] = oriented_edge_id
+                
+                # Update excluded triangles
+                excluded_triangles.update(face_indices)
+                
+                #print("Boundary edges:", boundary_edges)
+                #print("Removed edges:", removed_edges)
+                #print("Curved edge vertices:", curved_edge_vertices)
+                #print("Oriented edges map:", oriented_edges_map)
+                #print("Edge curve IDs:", edge_curve_ids)
+                excluded_triangles.update(face_indices)
+
+                # Create edge loop using the existing ORIENTED_EDGE IDs
+                oriented_edges = [
+                    edge_curve_ids['start_line'],   # Already an ORIENTED_EDGE ID
+                    edge_curve_ids['bottom_arc'],  # Already an ORIENTED_EDGE ID
+                    edge_curve_ids['end_line'],    # Already an ORIENTED_EDGE ID
+                    edge_curve_ids['top_arc']     # Already an ORIENTED_EDGE ID
+                ]
+
+                # Create edge loop directly with existing oriented edges
+                entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edges)})) /* oriented edge loop */;")
+                edge_loop_id = current_id
+                current_id += 1
+                
+                # Create face bound
+                entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
+                face_bound_id = current_id
+                current_id += 1
+                
+                # Create cylindrical surface
+                entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['top']},{radius:.4f});")
+                surface_id = current_id
+                current_id += 1
+                
+                # Create advanced face
+                entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.) /* partial cylinder */;")
+                all_face_ids.append(current_id)
+                current_id += 1
+                excluded_triangles.update(face_indices)
+                successfully_processed_cylinders.append((type_name, face_indices, diameter, center, axis, component_edges))
         
-            
-        elif type_name == "partial_cylinder":  # partial cylinder
-            #print("partial cylinder")
-            start_bottom, end_bottom, start_top, end_top = generate_partial_cylinder(
-                vertices, triangles, face_indices, diameter, center, axis)
-            
-            point_ids = {}
-            for name, point in [
-                ('surface_origin', bottom_center),
-                ('bottom_center', bottom_center),
-                ('top_center', top_center),
-                ('start_bottom', start_bottom),
-                ('end_bottom', end_bottom),
-                ('start_top', start_top),
-                ('end_top', end_top)
-            ]:
-                entities.append(f"#{current_id}=CARTESIAN_POINT('',({point[0]:.4f},{point[1]:.4f},{point[2]:.4f}));")
-                point_ids[name] = current_id
-                current_id += 1
-            
-            # Create directions
-            direction_ids = {}
-            for name, dir_vector in [('axis', axis), ('ref', ref_dir)]:
-                entities.append(f"#{current_id}=DIRECTION('',({dir_vector[0]:.4f},{dir_vector[1]:.4f},{dir_vector[2]:.4f}));")
-                direction_ids[name] = current_id
-                current_id += 1
-            
-            # Create vertex points
-            vertex_ids = {}
-            for name in ['start_bottom', 'end_bottom', 'start_top', 'end_top']:
-                entities.append(f"#{current_id}=VERTEX_POINT('',#{point_ids[name]});")
-                vertex_ids[name] = current_id
-                current_id += 1
-            
-            # Create placements
-            placement_ids = {}
-            for name in ['bottom', 'top']:
-                center_id = point_ids[f'{name}_center']
-                entities.append(f"#{current_id}=AXIS2_PLACEMENT_3D('',#{center_id},#{direction_ids['axis']},#{direction_ids['ref']});")
-                placement_ids[name] = current_id
-                current_id += 1
-            
-            # Create circles
-            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['bottom']},{radius:.4f});")
-            bottom_circle_id = current_id
-            current_id += 1
-            
-            entities.append(f"#{current_id}=CIRCLE('',#{placement_ids['top']},{radius:.4f});")
-            top_circle_id = current_id
-            current_id += 1
-            
-            # Create vectors and lines for vertical edges
-            entities.append(f"#{current_id}=VECTOR('',#{direction_ids['axis']},{height:.4f});")
-            line_vector_id = current_id
-            current_id += 1
-            
-            line_ids = {}
-            for name in ['start', 'end']:
-                entities.append(f"#{current_id}=LINE('',#{point_ids[f'{name}_bottom']},#{line_vector_id});")
-                line_ids[name] = current_id
-                current_id += 1
-            
-            # Define curve mappings - following the reference code structure
-            #print("\nDEBUG: Vertex Classification")
-            #print(f"Min height: {min_height:.4f}")
-            #print(f"Max height: {max_height:.4f}")
-            #print(f"Height range: {max_height - min_height:.4f}")
-            
-            vertex_heights = []
-            for v1, v2 in component_edges:
-                v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
-                v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
-                vertex_heights.extend([v1_height, v2_height])
-            
-            vertex_heights.sort()
-            #print("\nVertex height distribution:")
-            #print(f"Min vertex height: {vertex_heights[0]:.4f}")
-            #print(f"Max vertex height: {vertex_heights[-1]:.4f}")
-            #print(f"Number of unique heights: {len(set([round(h, 4) for h in vertex_heights]))}")
-            #print(f"First few heights: {[f'{h:.4f}' for h in vertex_heights[:5]]}")
-            #print(f"Last few heights: {[f'{h:.4f}' for h in vertex_heights[-5:]]}")
+        except KeyError as e:
+            # If KeyError (or any other error in cylinder processing), don't exclude these triangles
+            print(f"Warning: Failed to process cylinder at vertex {str(e)}, falling back to planar representation")
+            # Don't add to excluded_triangles - let them process as planar faces
+            continue
 
-            # Classify vertices
-            arc_vertices = {'bottom': set(), 'top': set()}
-            bottom_to_top = {}
-            top_to_bottom = {}
-            
-            for v1, v2 in component_edges:
-                v1_height = np.dot(np.array(vertices[v1]) - bottom_center, axis_np)
-                v2_height = np.dot(np.array(vertices[v2]) - bottom_center, axis_np)
-                
-                dist1_to_bottom = abs(v1_height - min_height)
-                dist1_to_top = abs(v1_height - max_height)
-                dist2_to_bottom = abs(v2_height - min_height)
-                dist2_to_top = abs(v2_height - max_height)
-                
-                if dist1_to_bottom < dist1_to_top and dist2_to_top < dist2_to_bottom:
-                    # v1 is bottom, v2 is top
-                    arc_vertices['bottom'].add(v1)
-                    arc_vertices['top'].add(v2)
-                    if v1 not in bottom_to_top:
-                        bottom_to_top[v1] = []
-                    bottom_to_top[v1].append(v2)
-                    if v2 not in top_to_bottom:
-                        top_to_bottom[v2] = []
-                    top_to_bottom[v2].append(v1)
-                elif dist1_to_top < dist1_to_bottom and dist2_to_bottom < dist2_to_top:
-                    # v1 is top, v2 is bottom
-                    arc_vertices['top'].add(v1)
-                    arc_vertices['bottom'].add(v2)
-                    if v2 not in bottom_to_top:
-                        bottom_to_top[v2] = []
-                    bottom_to_top[v2].append(v1)
-                    if v1 not in top_to_bottom:
-                        top_to_bottom[v1] = []
-                    top_to_bottom[v1].append(v2)
-                elif dist1_to_bottom < dist1_to_top and dist2_to_bottom < dist2_to_top:
-                    # both are bottom vertices
-                    arc_vertices['bottom'].add(v1)
-                    arc_vertices['bottom'].add(v2)
-                else:
-                    # both are top vertices
-                    arc_vertices['top'].add(v1)
-                    arc_vertices['top'].add(v2)
-            
-            #print(f"\nVertex classification results:")
-            #print(f"Bottom vertices: {len(arc_vertices['bottom'])}")
-            #print(f"Top vertices: {len(arc_vertices['top'])}")
-            #print(f"Bottom-to-top connections: {len(bottom_to_top)}")
-            #print(f"Top-to-bottom connections: {len(top_to_bottom)}")
-            
-            if not arc_vertices['bottom'] or not arc_vertices['top']:
-                #print("Error: Failed to find both top and bottom vertices")
-                continue
-            
-            # Sort bottom vertices by angle around axis
-            bottom_verts = list(arc_vertices['bottom'])
-            bottom_verts.sort(key=lambda v: np.arctan2(
-                np.dot(np.array(vertices[v]) - bottom_center, ref_dir),
-                np.dot(np.array(vertices[v]) - bottom_center, np.cross(axis_np, ref_dir))
-            ))
-            top_verts = list(arc_vertices['top'])
-            top_verts.sort(key=lambda v: np.arctan2(
-                np.dot(np.array(vertices[v]) - top_center, ref_dir),
-                np.dot(np.array(vertices[v]) - top_center, np.cross(axis_np, ref_dir))
-            ))
-                      
-            bottom_angles = []
-            for v in arc_vertices['bottom']:
-                point = np.array(vertices[v]) - bottom_center
-                point_proj = point - np.dot(point, axis_np) * axis_np
-                angle = np.arctan2(
-                    np.dot(point_proj, np.cross(axis_np, ref_dir)),
-                    np.dot(point_proj, ref_dir)
-                )
-                if angle < 0:
-                    angle += 2 * np.pi
-                bottom_angles.append((v, angle))
-
-            # Sort by angle and find largest gap
-            bottom_angles.sort(key=lambda x: x[1])
-            max_gap = 0
-            gap_idx = 0
-
-            for i in range(len(bottom_angles)):
-                angle1 = bottom_angles[i][1]
-                angle2 = bottom_angles[(i + 1) % len(bottom_angles)][1]
-                if angle2 < angle1:
-                    angle2 += 2 * np.pi
-                gap = angle2 - angle1
-                if gap > max_gap:
-                    max_gap = gap
-                    gap_idx = i
-
-            # The vertex after the largest gap is the start, the vertex before is the end
-            start_bottom = bottom_angles[(gap_idx + 1) % len(bottom_angles)][0]
-            end_bottom = bottom_angles[gap_idx][0]
-
-            #print(f"\nAngle analysis:")
-            #print(f"Max gap: {max_gap * 180/np.pi:.2f} degrees")
-            #print(f"Start bottom vertex: {start_bottom}")
-            #print(f"End bottom vertex: {end_bottom}")
-
-            # Find corresponding top vertices using existing bottom_to_top mapping
-            start_top_candidates = bottom_to_top[start_bottom]
-            end_top_candidates = bottom_to_top[end_bottom]
-
-            # Calculate angle for start bottom vertex
-            point_start_bottom = np.array(vertices[start_bottom]) - bottom_center
-            proj_start_bottom = point_start_bottom - np.dot(point_start_bottom, axis_np) * axis_np
-            start_bottom_angle = np.arctan2(
-                np.dot(proj_start_bottom, np.cross(axis_np, ref_dir)),
-                np.dot(proj_start_bottom, ref_dir)
-            )
-            if start_bottom_angle < 0:
-                start_bottom_angle += 2 * np.pi
-
-            # Find matching start top vertex
-            start_top_angles = []
-            for candidate in start_top_candidates:
-                point = np.array(vertices[candidate]) - top_center
-                proj = point - np.dot(point, axis_np) * axis_np
-                angle = np.arctan2(
-                    np.dot(proj, np.cross(axis_np, ref_dir)),
-                    np.dot(proj, ref_dir)
-                )
-                if angle < 0:
-                    angle += 2 * np.pi
-                start_top_angles.append((candidate, abs(angle - start_bottom_angle)))
-
-            start_top = min(start_top_angles, key=lambda x: x[1])[0]
-
-            # Calculate angle for end bottom vertex
-            point_end_bottom = np.array(vertices[end_bottom]) - bottom_center
-            proj_end_bottom = point_end_bottom - np.dot(point_end_bottom, axis_np) * axis_np
-            end_bottom_angle = np.arctan2(
-                np.dot(proj_end_bottom, np.cross(axis_np, ref_dir)),
-                np.dot(proj_end_bottom, ref_dir)
-            )
-            if end_bottom_angle < 0:
-                end_bottom_angle += 2 * np.pi
-
-            # Find matching end top vertex
-            end_top_angles = []
-            for candidate in end_top_candidates:
-                point = np.array(vertices[candidate]) - top_center
-                proj = point - np.dot(point, axis_np) * axis_np
-                angle = np.arctan2(
-                    np.dot(proj, np.cross(axis_np, ref_dir)),
-                    np.dot(proj, ref_dir)
-                )
-                if angle < 0:
-                    angle += 2 * np.pi
-                end_top_angles.append((candidate, abs(angle - end_bottom_angle)))
-
-            end_top = min(end_top_angles, key=lambda x: x[1])[0]
-
-            # Define connections using the matched vertices
-            start_connection = {start_bottom, start_top}
-            end_connection = {end_bottom, end_top}
-
-            #print(f"\nFound connections:")
-            #print(f"Start connection: {start_connection}")
-            #print(f"End connection: {end_connection}")
-            
-            #print(f"Refined start connection: {start_connection}")
-            #print(f"Refined end connection: {end_connection}")
-            
-            # Now process each curve with known connections
-            curve_mappings = {
-                'start_line': (vertex_ids['start_bottom'], vertex_ids['start_top'], line_ids['start'],'.T.'),
-                'bottom_arc': (vertex_ids['start_bottom'], vertex_ids['end_bottom'], bottom_circle_id,'.F.'),
-                'end_line': (vertex_ids['end_bottom'], vertex_ids['end_top'], line_ids['end'],'.F.'),
-                'top_arc': (vertex_ids['start_top'], vertex_ids['end_top'], top_circle_id,'.T.')  # Changed order here
-            }
-
-            edge_curve_ids = {}
-            
-            # Process in specific order to maintain ID sequence
-            curve_order = ['start_line', 'bottom_arc', 'end_line', 'top_arc']
-            
-            for name in curve_order:
-                start_vertex, end_vertex, curve, orientation = curve_mappings[name]
-                
-                # Create EDGE_CURVE
-                entities.append(f"#{current_id}=EDGE_CURVE('',#{start_vertex},#{end_vertex},#{curve},.T.);")
-                edge_curve_id = current_id
-                current_id += 1
-                
-                # Create ORIENTED_EDGE
-                entities.append(f"#{current_id}=ORIENTED_EDGE('',*,*,#{edge_curve_id},{orientation});")
-                oriented_edge_id = current_id
-                current_id += 1
-                
-                # Assign vertices based on edge type
-                if name == 'bottom_arc':
-                    vertices_for_edge = arc_vertices['bottom']
-                elif name == 'top_arc':
-                    vertices_for_edge = arc_vertices['top']
-                elif name == 'start_line':
-                    vertices_for_edge = start_connection
-                    removed_edges.add(tuple(sorted(vertices_for_edge)))
-                elif name == 'end_line':
-                    vertices_for_edge = end_connection
-                    removed_edges.add(tuple(sorted(vertices_for_edge)))
-                #else:
-                    #print("not quite right")
-                
-                curved_edge_vertices[oriented_edge_id] = vertices_for_edge
-                oriented_edges_map[oriented_edge_id] = tuple(sorted(vertices_for_edge))
-                edge_curve_ids[name] = oriented_edge_id
-            
-            # Update excluded triangles
-            excluded_triangles.update(face_indices)
-            
-            #print("Boundary edges:", boundary_edges)
-            #print("Removed edges:", removed_edges)
-            #print("Curved edge vertices:", curved_edge_vertices)
-            #print("Oriented edges map:", oriented_edges_map)
-            #print("Edge curve IDs:", edge_curve_ids)
-            excluded_triangles.update(face_indices)
-
-            # Create edge loop using the existing ORIENTED_EDGE IDs
-            oriented_edges = [
-                edge_curve_ids['start_line'],   # Already an ORIENTED_EDGE ID
-                edge_curve_ids['bottom_arc'],  # Already an ORIENTED_EDGE ID
-                edge_curve_ids['end_line'],    # Already an ORIENTED_EDGE ID
-                edge_curve_ids['top_arc']     # Already an ORIENTED_EDGE ID
-            ]
-
-            # Create edge loop directly with existing oriented edges
-            entities.append(f"#{current_id}=EDGE_LOOP('',({','.join(f'#{e}' for e in oriented_edges)})) /* oriented edge loop */;")
-            edge_loop_id = current_id
-            current_id += 1
-            
-            # Create face bound
-            entities.append(f"#{current_id}=FACE_BOUND('',#{edge_loop_id},.T.);")
-            face_bound_id = current_id
-            current_id += 1
-            
-            # Create cylindrical surface
-            entities.append(f"#{current_id}=CYLINDRICAL_SURFACE('',#{placement_ids['top']},{radius:.4f});")
-            surface_id = current_id
-            current_id += 1
-            
-            # Create advanced face
-            entities.append(f"#{current_id}=ADVANCED_FACE('',(#{face_bound_id}),#{surface_id},.T.) /* partial cylinder */;")
-            all_face_ids.append(current_id)
-            current_id += 1
     vertices_list = list(vertices) if isinstance(vertices, set) else vertices
     # Create edge lookup at the start - simple index-based lookup
     edge_lookup = {tuple(sorted([v1, v2])): i for i, (v1, v2) in enumerate(edges)}
     
     # Process planar faces
-    merged_groups = merge_coplanar_triangles(vertices, triangles)
     planar_faces = []
     
     for group_triangles in merged_groups:
@@ -1373,7 +1302,6 @@ def generate_step_entities(vertices, edges, triangles, start_id=100):
     
     return "\n".join(entities), current_id, geometry, closed_shell_id
 
-@log_time
 def get_face_boundaries(vertices, triangles, group_indices, edges):
     """Get outer and inner loops for a merged face group using bounding box detection.
     Args:
@@ -1477,7 +1405,6 @@ def get_face_boundaries(vertices, triangles, group_indices, edges):
     
     return outer_loop, inner_loops
 
-@log_time
 def analyze_edge_loop_simple(edge_loop_str, edges_to_remove, edge_lookup, geometry, oriented_edges_map):
    edge_ids = [int(x.strip('(#)')) for x in edge_loop_str.strip("'{}").split(',')]
    #print(f"here is the edge_loop_str{edge_loop_str}")
@@ -1531,7 +1458,7 @@ GLOBAL_UNCERTAINTY_ASSIGNED_CONTEXT((#11))
 GLOBAL_UNIT_ASSIGNED_CONTEXT((#12,#16,#17))
 REPRESENTATION_CONTEXT('Part 1','TOP_LEVEL_ASSEMBLY_PART'));
  /* Units Setup */
- #11=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(3.93700787401575E-7),#12,
+ #11=UNCERTAINTY_MEASURE_WITH_UNIT(LENGTH_MEASURE(3.93700787401575E-2),#12,
  'DISTANCE_ACCURACY_VALUE','Maximum Tolerance applied to model');
  #12=(CONVERSION_BASED_UNIT('INCH',#14)
  LENGTH_UNIT()
