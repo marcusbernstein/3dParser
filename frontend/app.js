@@ -121,23 +121,3 @@ document.addEventListener('DOMContentLoaded', function() {
     reader.readAsDataURL(file);
   });
   
-  // Optional: Add a test API connection button
-  const testButton = document.createElement('button');
-  testButton.textContent = "Test API Connection";
-  testButton.style.marginTop = "10px";
-  testButton.addEventListener('click', function() {
-    console.log("Testing API connection to:", apiEndpoint);
-    fetch(`${apiEndpoint}/convert`, {
-      method: 'OPTIONS'
-    })
-    .then(response => {
-      console.log("API test response:", response.status, response.statusText);
-      statusDiv.innerHTML = "API test: " + (response.ok ? "Connected" : "Failed");
-    })
-    .catch(error => {
-      console.error("API test error:", error);
-      statusDiv.innerHTML = "API test failed: " + error.message;
-    });
-  });
-  document.querySelector('.container').appendChild(testButton);
-});
