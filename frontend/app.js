@@ -1,15 +1,61 @@
 document.addEventListener('DOMContentLoaded', function() {
-  // Get UI elements
+  // Get UI elements for file conversion
   const fileInput = document.getElementById('file-input');
   const uploadButton = document.getElementById('upload-button');
   const statusDiv = document.getElementById('status');
   const downloadArea = document.getElementById('download-area');
   const downloadLink = document.getElementById('download-link');
+  const fileInputLabel = document.querySelector('.file-input-label');
+  
+  // Get UI elements for flow diagram
+  const diagramBoxes = document.querySelectorAll('.diagram-box');
+  const panels = document.querySelectorAll('.panel');
   
   // API Gateway endpoint
   const apiEndpoint = 'https://vjfui8m7s6.execute-api.us-east-2.amazonaws.com/default';
   
   console.log("File converter initialized with API endpoint:", apiEndpoint);
+  
+  // Update file input label when a file is selected
+  fileInput.addEventListener('change', function() {
+    if (fileInput.files.length > 0) {
+      const fileName = fileInput.files[0].name;
+      // Truncate filename if too long
+      fileInputLabel.textContent = fileName.length > 25 ? fileName.substring(0, 22) + '...' : fileName;
+      fileInputLabel.title = fileName; // Show full name on hover
+    } else {
+      fileInputLabel.textContent = 'Select STL File';
+      fileInputLabel.title = '';
+    }
+  });
+  
+  // Handle diagram box clicks
+  diagramBoxes.forEach(box => {
+    box.addEventListener('click', function() {
+      // Remove active class from all boxes
+      diagramBoxes.forEach(b => b.classList.remove('active'));
+      
+      // Add active class to clicked box
+      this.classList.add('active');
+      
+      // Get the panel number
+      const panelNumber = this.getAttribute('data-panel');
+      
+      // Hide all panels
+      panels.forEach(panel => panel.classList.remove('active'));
+      
+      // Show the selected panel
+      document.getElementById(`panel-${panelNumber}`).classList.add('active');
+      
+      // Smooth scroll to panel if needed
+      const panelContainer = document.querySelector('.panel-container');
+      const containerTop = panelContainer.getBoundingClientRect().top;
+      
+      if (containerTop < 0 || containerTop > window.innerHeight / 2) {
+        panelContainer.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      }
+    });
+  });
   
   // Handle upload button click
   uploadButton.addEventListener('click', function() {
@@ -27,8 +73,15 @@ document.addEventListener('DOMContentLoaded', function() {
     const file = fileInput.files[0];
     console.log("File selected:", file.name, "Type:", file.type, "Size:", file.size, "bytes");
     
+    // Check if file is an STL file
+    if (!file.name.toLowerCase().endsWith('.stl')) {
+      statusDiv.innerHTML = "Please select an STL file";
+      console.log("Not an STL file");
+      return;
+    }
+    
     // Show upload status
-    statusDiv.innerHTML = "Uploading...";
+    statusDiv.innerHTML = '<span class="status-uploading">Uploading and converting. Please wait...</span>';
     
     // Read file as base64
     const reader = new FileReader();
@@ -92,20 +145,23 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         // Update UI with success
-        statusDiv.innerHTML = "File converted successfully!";
+        statusDiv.innerHTML = '<span class="status-success">File converted successfully!</span>';
         downloadArea.style.display = "block";
         
         // Set download link
         console.log("Setting download URL:", data.downloadUrl);
         downloadLink.href = data.downloadUrl;
-        downloadLink.download = file.name || "converted-file";
+        
+        // Set download filename to original filename with .step extension
+        const originalName = file.name.replace(/\.stl$/i, '');
+        downloadLink.download = `${originalName}.step`;
         downloadLink.target = "_blank"; // Open in new tab as fallback
         
         console.log("File processing complete");
       })
       .catch(error => {
         console.error("Request failed:", error);
-        statusDiv.innerHTML = "Error: " + error.message;
+        statusDiv.innerHTML = '<span class="status-error">Error: ' + error.message + '</span>';
         
         // Additional error details
         if (error.name === 'SyntaxError') {
@@ -120,4 +176,22 @@ document.addEventListener('DOMContentLoaded', function() {
     console.log("Starting to read file as Data URL");
     reader.readAsDataURL(file);
   });
+  
+  // Add these CSS rules programmatically
+  const style = document.createElement('style');
+  style.textContent = `
+    .status-uploading {
+      color: #3498db;
+      font-weight: 600;
+    }
+    .status-success {
+      color: #2ecc71;
+      font-weight: 600;
+    }
+    .status-error {
+      color: #e74c3c;
+      font-weight: 600;
+    }
+  `;
+  document.head.appendChild(style);
 });
