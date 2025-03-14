@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', function() {
       fileInputLabel.textContent = fileName.length > 25 ? fileName.substring(0, 22) + '...' : fileName;
       fileInputLabel.title = fileName; // Show full name on hover
     } else {
-      fileInputLabel.textContent = 'Select STL File';
+      fileInputLabel.textContent = 'Upload ASCII, Binary, or Text STL File';
       fileInputLabel.title = '';
     }
   });
