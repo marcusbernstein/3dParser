@@ -3,6 +3,7 @@
 <head>
   <title>STL to STEP File Converter</title>
   <link rel="stylesheet" href="style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
 <body>
   <div class="container">
@@ -14,7 +15,7 @@
       <div class="upload-area">
         <div class="file-input-container">
           <input type="file" id="file-input" accept=".stl">
-          <label for="file-input" class="file-input-label">Select STL File</label>
+          <label for="file-input" class="file-input-label">Upload ASCII, Binary, or Text STL File</label>
         </div>
         <button id="upload-button" class="primary-button">Convert File</button>
       </div>
@@ -25,7 +26,7 @@
     </div>
     
     <div class="process-section">
-      <h2>How STL to STEP Conversion Works</h2>
+      <h2>How Does it Work?</h2>
       
       <div class="flow-diagram">
         <!-- Single row of boxes -->
@@ -69,7 +70,7 @@
           <div class="panel-content">
             <div class="content-with-image">
               <div class="text-content">
-                <p>STL and STEP files are ubiquitous CAD file types used for design, manufacturing, and simulation. STEP, and other solid file formats, are often converted to STL; but not the other way around.</p>
+                <p>STL and STEP files are ubiquitous CAD file types used for design, manufacturing, and simulation.</p>
                 <div class="panel-columns">
                   <div class="panel-column">
                     <h4>STL Files</h4>
@@ -77,7 +78,7 @@
                       <li>Similar to pointclouds, list of points/triangles which form shapes</li>
                       <li>May or may not be watertight/topologically sound</li>
                       <li>Designed with minimal information for straightforward 3d printing</li>
-                      <li>No way to edit/improve</li>
+                      <li>Impossible to edit/improve</li>
                     </ul>
                   </div>
                   <div class="panel-column">
@@ -168,7 +169,7 @@ endsolid Mesh</pre>
           </div>
         </div>
         
-        <!-- Panel 5: STEP file structure (was panel 6) -->
+        <!-- Panel 5: STEP file structure -->
         <div class="panel" id="panel-5">
           <h3>STEP File Structure</h3>
           <div class="panel-content">
@@ -195,7 +196,7 @@ ADVANCED_FACES
           </div>
         </div>
         
-        <!-- Panel 6: Programming, Hosting, Gaps, and Lessons Learned (was panel 7) -->
+        <!-- Panel 6: Programming, Hosting, Gaps, and Lessons Learned -->
         <div class="panel" id="panel-6">
           <h3>Programming, Hosting, Gaps, and Lessons Learned</h3>
           <div class="panel-content">
@@ -223,7 +224,7 @@ ADVANCED_FACES
   
   <footer>
     <div class="footer-content">
-      Created by Marcus Bernstein with <a href="https://github.com/username/repo-name" target="_blank">codebase here</a>: feel free to use, copy, and improve
+      Created by Marcus Bernstein at George Washington University with <a href="https://github.com/marcusbernstein/3dParser/tree/main" target="_blank">codebase here</a>: feel free to use, copy, and improve
     </div>
   </footer>
   
