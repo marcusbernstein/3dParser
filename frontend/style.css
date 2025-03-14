@@ -1,6 +1,64 @@
-body {
+/* Media queries for responsive layout */
+@media (max-width: 1100px) {
+  body {
+    max-width: 95%;
+  }
+  
+  .container {
+    padding: 15px;
+  }
+  
+  .panel-content {
+    flex-direction: column;
+  }
+}
+
+@media (max-width: 768px) {
+  .content-with-image {
+    flex-direction: column;
+  }
+  
+  .text-content {
+    order: 1;
+  }
+  
+  .image-placeholder, 
+  .image-container {
+    order: 0;
+    margin-bottom: 15px;
+    width: 100%;
+  }
+  
+  .panel-columns {
+    flex-direction: column;
+  }
+  
+  .panel-column {
+    margin-bottom: 15px;
+  }
+  
+  .diagram-box {
+    width: 85px;
+    height: 70px;
+    padding: 6px;
+  }
+  
+  .box-title {
+    font-size: 10px;
+  }
+  
+  .icon-placeholder {
+    width: 20px;
+    height: 20px;
+  }
+  
+  .arrow {
+    font-size: 16px;
+  }
+}body {
   font-family: 'Segoe UI', Arial, sans-serif;
-  max-width: 1000px;
+  max-width: 100%;
+  min-width: 320px;
   margin: 0 auto;
   padding: 15px;
   line-height: 1.5;
@@ -13,11 +71,13 @@ body {
 
 .container {
   border: 1px solid #ddd;
-  padding: 20px;
+  padding: 15px;
   border-radius: 6px;
   box-shadow: 0 2px 10px rgba(0,0,0,0.08);
   background-color: white;
   margin-bottom: 10px;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 /* Header styles */
@@ -139,12 +199,19 @@ h2:after {
   overflow-x: auto;
 }
 
+.flow-diagram {
+  margin: 20px 0;
+  width: 100%;
+}
+
 .diagram-row {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
   margin-bottom: 20px;
-  min-width: 900px;
+  width: 100%;
 }
 
 .code-example {
@@ -300,6 +367,20 @@ h2:after {
   padding: 10px;
 }
 
+.image-container {
+  flex: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-image {
+  max-width: 100%;
+  max-height: 300px;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
 .panel-columns {
   display: flex;
   gap: 20px;
@@ -345,10 +426,11 @@ footer {
   padding: 10px;
   font-size: 14px;
   box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
+  z-index: 100;
 }
 
 .footer-content {
-  max-width: 1000px;
+  max-width: 100%;
   margin: 0 auto;
 }
 
