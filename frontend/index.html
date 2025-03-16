@@ -91,7 +91,7 @@
                   </div>
                 </div>
               </div>
-              <div class="image-placeholder">
+              <div class="image-container">
                 <img src="https://i.postimg.cc/WzG2K1Fh/output-9.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
@@ -130,7 +130,7 @@
 endsolid Mesh</pre>
                 <p>You can see how this raw geometric information would be perfect to 3d print a part, but not right to adjust the mug handle or simulate it's strength.</p>
               </div>
-              <div class="image-placeholder">
+              <div class="image-container">
                 <img src="https://i.postimg.cc/5ybhz47V/mug3.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
@@ -147,7 +147,7 @@ endsolid Mesh</pre>
                 <p>To do that, we search triangles for those that are adjacent (share an edge) and coplanar (normal directions equal, within tolerance).</p> 
                 <p>If triangles meet this criteria, we merge them, and ultimately build robust 2d shapes from their outlines.</p>
               </div>
-              <div class="image-placeholder">
+              <div class="image-container">
                 <img src="https://i.postimg.cc/DwMKxXjx/mug3-1.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
@@ -164,7 +164,7 @@ endsolid Mesh</pre>
                 <p>Generally, parts have a 25-gon (or similar), are very likely to be circles, especially if they can be built tangent to existing faces or create through holes.</p>
                 <p>When we see patterns that those 25-gons have the same area and incremental angle, after merging triangles and within reasonable tolerances, we can assume that the design intent is rounded faces. By analyzing the total angle and identifying patterns in the points involved, we can build robust curvature that blends with adjacent faces for ultimately watertight geometry.</p>
               </div>
-              <div class="image-placeholder">
+              <div class="image-container">
                   <img src="https://i.postimg.cc/52vmrcpD/mug3-2.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
@@ -191,7 +191,7 @@ ADVANCED_FACES
       CARTESIAN_POINTs</pre>
                 <p>Given this structure, once we understood the desired geometry, it was straightforward to build manifold geometry.</p>
               </div>
-                <div class="image-placeholder">
+                <div class="image-container">
                     <img src="https://i.postimg.cc/Y2Yyvy5r/output-9-1.png" alt="STL vs STEP Comparison" class="panel-image">
                  </div>
               </div>
