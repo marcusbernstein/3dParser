@@ -38,17 +38,17 @@
           </div>
           <div class="arrow">&rarr;</div>
           <div class="diagram-box" data-panel="2">
-            <img src="https://www.svgrepo.com/show/450945/grid-triangle.svg" alt="3D Icon" class="icon">
+            <img src="https://www.svgrepo.com/show/387283/cube-five.svg" alt="3D Icon" class="icon">
             <div class="box-title">STL File Structure: Triangles</div> 
-          </div>
+          </div> 
           <div class="arrow">&rarr;</div>
           <div class="diagram-box" data-panel="3">
-            <img src="https://www.svgrepo.com/show/387283/cube-five.svg" alt="3D Icon" class="icon">
+            <img src="https://www.svgrepo.com/show/450945/grid-triangle.svg" alt="3D Icon" class="icon">
             <div class="box-title">Building Faces: Adjacency and Coplanarity</div>
           </div>
           <div class="arrow">&rarr;</div>
           <div class="diagram-box" data-panel="4">
-            <img src="https://www.svgrepo.com/show/280420/cloud-computing-cloud.svg" alt="3D Icon" class="icon">
+            <img src="https://www.svgrepo.com/show/326301/polygon.svg" alt="3D Icon" class="icon">
             <div class="box-title">Tessellation: Building Curvature</div>
           </div>
           <div class="arrow">&rarr;</div>
@@ -58,7 +58,7 @@
           </div>
           <div class="arrow">&rarr;</div>
           <div class="diagram-box" data-panel="6">
-            <img src="https://www.svgrepo.com/show/16295/3d.svg" alt="3D Icon" class="icon">
+            <img src="https://www.svgrepo.com/show/280420/cloud-computing-cloud.svg" alt="3D Icon" class="icon">
             <div class="box-title">Programming and Lessons Learned</div>
           </div>
         </div>
@@ -77,9 +77,8 @@
                     <h4>STL Files</h4>
                     <ul>
                       <li>Similar to pointclouds, list of points/triangles which form shapes</li>
-                      <li>May or may not be watertight/topologically sound</li>
-                      <li>Designed with minimal information for straightforward 3d printing</li>
-                      <li>Impossible to edit/improve</li>
+                      <li>May or may not be topologically sound</li>
+                      <li>Designed with minimal information/file size for 3d printing, not for editing</li>
                     </ul>
                   </div>
                   <div class="panel-column">
@@ -87,13 +86,13 @@
                     <ul>
                       <li>Precise representations of manifold 3d geometry including validation</li>
                       <li>Ubiquitous across software/application (ISO 10303-21)</li>
-                      <li>Straightforward editing, improvements</li>
+                      <li>Straightforward editing/improvements</li>
                     </ul>
                   </div>
                 </div>
               </div>
               <div class="image-placeholder">
-                <div class="placeholder-text">STL vs STEP Comparison Image</div>
+                <img src="https://i.postimg.cc/WzG2K1Fh/output-9.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
           </div>
@@ -129,10 +128,10 @@
     endloop
   endfacet
 endsolid Mesh</pre>
-                <p>You can see how this information would be enough to 3d print a part, but not right to edit or simulate it.</p>
+                <p>You can see how this raw geometric information would be perfect to 3d print a part, but not right to adjust the mug handle or simulate it's strength.</p>
               </div>
               <div class="image-placeholder">
-                <div class="placeholder-text">STL Triangular Structure Image</div>
+                <img src="https://i.postimg.cc/5ybhz47V/mug3.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
           </div>
@@ -144,10 +143,12 @@ endsolid Mesh</pre>
           <div class="panel-content">
             <div class="content-with-image">
               <div class="text-content">
-                <p>To convert these triangles into solid boundary geometry, we search triangles for those that are adjacent (share an edge) and coplanar (normal directions equal, within tolerance). If triangles meet this criteria, we merge them, and ultimately build robust 2d shapes from their outlines.</p>
+                <p>Given those points, and triangle normal vectors,, we need to convert these triangles into solid boundary geometry.</p>
+                <p>To do that, we search triangles for those that are adjacent (share an edge) and coplanar (normal directions equal, within tolerance).</p> 
+                <p>If triangles meet this criteria, we merge them, and ultimately build robust 2d shapes from their outlines.</p>
               </div>
               <div class="image-placeholder">
-                <div class="placeholder-text">Adjacency and Coplanarity Diagram</div>
+                <img src="https://i.postimg.cc/DwMKxXjx/mug3-1.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
           </div>
@@ -160,11 +161,11 @@ endsolid Mesh</pre>
             <div class="content-with-image">
               <div class="text-content">
                 <p>STL files do not store curvature information. Thankfully, using common creation algorithms, we can reverse engineer them.</p>
-                <p>Generally, when parts have a 25-gon (or similar), are very likely to be circles, especially if they can be built tangent to existing faces or create through holes.</p>
+                <p>Generally, parts have a 25-gon (or similar), are very likely to be circles, especially if they can be built tangent to existing faces or create through holes.</p>
                 <p>When we see patterns that those 25-gons have the same area and incremental angle, after merging triangles and within reasonable tolerances, we can assume that the design intent is rounded faces. By analyzing the total angle and identifying patterns in the points involved, we can build robust curvature that blends with adjacent faces for ultimately watertight geometry.</p>
               </div>
               <div class="image-placeholder">
-                <div class="placeholder-text">Tessellation Process Visualization</div>
+                  <img src="https://i.postimg.cc/52vmrcpD/mug3-2.png" alt="STL vs STEP Comparison" class="panel-image">
               </div>
             </div>
           </div>
@@ -177,7 +178,7 @@ endsolid Mesh</pre>
             <div class="content-with-image">
               <div class="text-content">
                 <p>STEP files are standardized in their hierarchical structure, almost like a Table of Contents, which made it straightforward to build and validate robust geometry. STEP files are built from:</p>
-                <pre class="code-example">CLOSED_SHELLs (solid models with units, validation, tolerances, and metadata)
+                <pre class="code-example">CLOSED_SHELLs (including units/tolerances/metadata)
 ADVANCED_FACES
  PLANEs
   AXIS(s)
@@ -188,40 +189,95 @@ ADVANCED_FACES
     LINEs
      VERTEX_POINTs
       CARTESIAN_POINTs</pre>
-                <p>Given this structure, once we understood the desired geometry, it was straightforward to build strong models that worked well.</p>
+                <p>Given this structure, once we understood the desired geometry, it was straightforward to build manifold geometry.</p>
               </div>
-              <div class="image-placeholder">
-                <div class="placeholder-text">STEP File Structure Diagram</div>
+                <div class="image-placeholder">
+                    <img src="https://i.postimg.cc/Y2Yyvy5r/output-9-1.png" alt="STL vs STEP Comparison" class="panel-image">
+                 </div>
               </div>
             </div>
           </div>
-        </div>
         
         <!-- Panel 6: Programming, Hosting, Gaps, and Lessons Learned -->
         <div class="panel" id="panel-6">
-          <h3>Programming, Hosting, Gaps, and Lessons Learned</h3>
-          <div class="panel-content">
-            <div class="content-with-image">
-              <div class="text-content">
-                <p>Creating an STL to STEP converter involved several technical challenges:</p>
-                <ul>
-                  <li><strong>Programming:</strong> Lambda functions in Python with geometric libraries</li>
-                  <li><strong>Hosting:</strong> Serverless architecture on AWS to handle computational demands</li>
-                  <li><strong>Challenges:</strong> Edge cases in complex geometries, performance optimization</li>
-                  <li><strong>Gaps:</strong> Handling non-manifold geometry, self-intersecting meshes</li>
-                  <li><strong>Lessons Learned:</strong> Importance of robust validation and error handling</li>
-                </ul>
-                <p>Future improvements could include multi-file processing, better error visualization, and support for additional CAD formats.</p>
-              </div>
-              <div class="image-placeholder">
-                <div class="placeholder-text">Architecture and Implementation Diagram</div>
-              </div>
-            </div>
-          </div>
-        </div>
+  <h3>Programming, Hosting, Gaps, and Lessons Learned</h3>
+  <div class="panel-content">
+    <div class="content-with-image">
+      <div class="text-content">
+        <p>After writing the code in Python, with the help of Numpy and Pygame (for STL visualization), we needed to host it.</p>
+        <ul>
+          <li>The first step was building an AWS Lambda Function for computing power to handle the conversion. Here I learned the importance of O(n) time complexity, at scale, and needed to restructure some key functions (or pay the price in student AWS credits). </li>
+          <li>The Lambda function needed two S3 buckets, one to POST the files for conversion and one to GET the files back to the user. Of course, the files are encrypted, and deleted immediately once converted.</li>
+          <li>Lastly, a simple AWS Amplify frontend was built to handle the host the process and share how it works.</li>
+        </ul>
+        <p>The code does <strong>not</strong> work perfectly nor universally. Different STL export algorithms run through different processes, and leave random artifacts that I could not catalog let alone incorporate or assign computing power to catch.</p>
+        <p>The code could be further improved to handle more complex curvature, guess units based on values (a feature at 25.4 is probably an indicator of mm/in file size), and have better error visualization/validation.</p>
+      </div>
+<div class="architecture-diagram">
+  <div class="arch-container">
+    <!-- Top row - User flow -->
+    <div class="user-flow-row">
+      <div class="arch-box">
+        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="User Upload" class="arch-icon">
+        <div class="arch-title">User Uploads</div>
+      </div>
+      
+      <div class="arch-arrow">&rarr;</div>
+      
+      <div class="arch-box">
+        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="POST" class="arch-icon">
+        <div class="arch-title">POST to S3</div>
+      </div>
+      
+      <!-- Empty space in middle -->
+      <div class="empty-space"></div>
+      
+      <div class="arch-box">
+        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="GET" class="arch-icon">
+        <div class="arch-title">GET from S3</div>
+      </div>
+      
+      <div class="arch-arrow">&rarr;</div>
+      
+      <div class="arch-box">
+        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="Export" class="arch-icon">
+        <div class="arch-title">Export</div>
+      </div>
+    </div>
+    
+    <!-- Vertical connectors -->
+    <div class="connector-container">
+      <div class="vertical-arrow" style="margin-left: 105px;">&darr;</div>
+      <div class="vertical-arrow" style="margin-right: 105px; transform: rotate(180deg);">&darr;</div>
+    </div>
+    
+    <!-- Bottom row - Backend services -->
+    <div class="backend-row">
+      <div class="arch-box s3">
+        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="S3" class="arch-icon">
+        <div class="arch-title">S3 Bucket</div>
+      </div>
+      
+      <div class="arch-arrow">&rarr;</div>
+      
+      <div class="arch-box lambda">
+        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="Lambda" class="arch-icon">
+        <div class="arch-title">Lambda</div>
+      </div>
+      
+      <div class="arch-arrow">&rarr;</div>
+      
+      <div class="arch-box s3">
+        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="S3" class="arch-icon">
+        <div class="arch-title">S3 Bucket</div>
       </div>
     </div>
   </div>
+</div>
+
+
+      </div>
+    </div>
   
   <footer>
     <div class="footer-content">
