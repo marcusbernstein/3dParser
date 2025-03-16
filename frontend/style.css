@@ -282,15 +282,19 @@ h2:after {
   flex: 3;
 }
 
-.image-placeholder {
+.image-container {
   flex: 2;
-  background-color: #e9ecef;
-  border-radius: 6px;
   display: flex;
-  align-items: center;
   justify-content: center;
-  min-height: 200px;
-  border: 1px dashed #adb5bd;
+}
+
+.panel-image {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
 .placeholder-text {
@@ -298,20 +302,6 @@ h2:after {
   font-style: italic;
   text-align: center;
   padding: 10px;
-}
-
-.image-container {
-  flex: 2;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.panel-image {
-  max-width: 100%;
-  max-height: 300px;
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.1);
 }
 
 .panel-columns {
