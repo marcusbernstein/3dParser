@@ -591,3 +591,8 @@ footer a:hover {
 .error-link:hover {
   text-decoration: none;
 }
+#usage-counter {
+  font-weight: bold;
+  color: #74b9ff; /* Light blue that matches the link color */
+  margin-right: 4px;
+}
