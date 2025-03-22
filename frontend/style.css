@@ -54,8 +54,7 @@ h1 {
   flex-direction: column;
   align-items: center;
   gap: 15px;
-  width: 100%;
-  margin-bottom: 20px; /* Space between upload area and status/download */
+  width: calc(100% - 25px);
 }
 
 .file-input-container {
@@ -65,7 +64,7 @@ h1 {
 
 .primary-button {
   margin-top: 10px;
-  width: 100%;
+  width: 90%;
   max-width: 300px; /* Or whatever width works best */
 }
 
@@ -111,7 +110,6 @@ h1 {
   transition: background-color 0.3s;
   flex: 0 0 auto; /* Don't grow or shrink */
   white-space: nowrap;
-  margin-left: 25px; /* Space between input and button */
 }
 
 
@@ -432,7 +430,7 @@ footer a:hover {
   }
   
   .file-input-container {
-    width: 100%;
+    width: calc(100% - 25px);
     max-width: 300px; /* Adjust as needed */
   }
   
@@ -638,7 +636,7 @@ footer a:hover {
   /* Smaller architecture diagram */
   .architecture-diagram {
     transform-origin: top left;
-    transform: scale(0.85);
+    transform: scale(0.95);
     margin: 0;
   }
   
