@@ -488,10 +488,6 @@ footer a:hover {
   .diagram-row {
     justify-content: center;
   }
-  
-  .arrow:has(+ .diagram-box:nth-child(2n+1)) {
-    display: none;
-  }
 }
 
 .arch-container {
