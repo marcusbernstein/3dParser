@@ -54,11 +54,13 @@ h1 {
   align-items: center;
   gap: 15px;
   margin: 0;
+  flex-wrap: wrap; /* Allow wrapping on smaller screens */
 }
 
 .file-input-container {
-  flex: 1;
+  flex: 1 1 250px; /* Grow, shrink, and base width */
   position: relative;
+  min-width: 0; /* Allow text to truncate */
 }
 
 #file-input {
@@ -101,7 +103,11 @@ h1 {
   cursor: pointer;
   font-weight: 600;
   transition: background-color 0.3s;
+  flex: 0 0 auto; /* Don't grow or shrink */
+  white-space: nowrap;
+  margin-left: 25px; /* Space between input and button */
 }
+
 
 .primary-button:hover {
   background-color: #3a56d4;
@@ -574,4 +580,14 @@ footer a:hover {
   width: 80px;
   opacity: 0;
   margin: 0 5px;
+}
+
+.error-link {
+  color: inherit;
+  text-decoration: underline;
+  font-weight: bold;
+}
+
+.error-link:hover {
+  text-decoration: none;
 }
