@@ -172,13 +172,13 @@ endsolid Mesh</pre>
         </div>
         
         <!-- Panel 5: STEP file structure -->
-        <div class="panel" id="panel-5">
-          <h3>STEP File Structure</h3>
-          <div class="panel-content">
-            <div class="content-with-image">
-              <div class="text-content">
-                <p>STEP files are standardized in their hierarchical structure, almost like a Table of Contents, which made it straightforward to build and validate robust geometry. STEP files are built from:</p>
-                <pre class="code-example">CLOSED_SHELLs (including units/tolerances/metadata)
+<div class="panel" id="panel-5">
+  <h3>STEP File Structure</h3>
+  <div class="panel-content">
+    <div class="content-with-image">
+      <div class="text-content">
+        <p>STEP files are standardized in their hierarchical structure, almost like a Table of Contents, which made it straightforward to build and validate robust geometry. STEP files are built from:</p>
+        <pre class="code-example">CLOSED_SHELLs (including units/tolerances/metadata)
 ADVANCED_FACES
  PLANEs
   AXIS(s)
@@ -189,95 +189,100 @@ ADVANCED_FACES
     LINEs
      VERTEX_POINTs
       CARTESIAN_POINTs</pre>
-                <p>Given this structure, once we understood the desired geometry, it was straightforward to build manifold geometry.</p>
-              </div>
-                <div class="image-container">
-                    <img src="https://i.postimg.cc/Y2Yyvy5r/output-9-1.png" alt="STL vs STEP Comparison" class="panel-image">
-                 </div>
-              </div>
-            </div>
-          </div>
-        
-        <!-- Panel 6: Programming, Hosting, Gaps, and Lessons Learned -->
-        <div class="panel" id="panel-6">
+        <p>Given this structure, once we understood the desired geometry, it was straightforward to build manifold geometry.</p>
+      </div>
+      <div class="image-container">
+        <img src="https://i.postimg.cc/Y2Yyvy5r/output-9-1.png" alt="STL vs STEP Comparison" class="panel-image">
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Panel 6: Programming, Hosting, Gaps, and Lessons Learned -->
+<div class="panel" id="panel-6">
   <h3>Programming, Hosting, Gaps, and Lessons Learned</h3>
   <div class="panel-content">
     <div class="content-with-image">
       <div class="text-content">
         <p>After writing the code in Python, with the help of Numpy and Pygame (for STL visualization), we needed to host it.</p>
         <ul>
-          <li>The first step was building an AWS Lambda Function for computing power to handle the conversion. Here I learned the importance of O(n) time complexity, at scale, and needed to restructure some key functions (or pay the price in student AWS credits). </li>
+          <li>The first step was building an AWS Lambda Function for computing power to handle the conversion. Here I learned the importance of O(n) time complexity, at scale, and needed to restructure some key functions (or pay the price in student AWS credits).</li>
           <li>The Lambda function needed two S3 buckets, one to POST the files for conversion and one to GET the files back to the user. Of course, the files are encrypted, and deleted immediately once converted.</li>
           <li>Lastly, a simple AWS Amplify frontend was built to handle the host the process and share how it works.</li>
         </ul>
         <p>The code does <strong>not</strong> work perfectly nor universally. Different STL export algorithms run through different processes, and leave random artifacts that I could not catalog let alone incorporate or assign computing power to catch.</p>
         <p>The code could be further improved to handle more complex curvature, guess units based on values (a feature at 25.4 is probably an indicator of mm/in file size), and have better error visualization/validation.</p>
       </div>
-<div class="architecture-diagram">
-  <div class="arch-container">
-    <!-- Top row - User flow -->
-    <div class="user-flow-row">
-      <div class="arch-box">
-        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="User Upload" class="arch-icon">
-        <div class="arch-title">User Uploads</div>
-      </div>
-      
-      <div class="arch-arrow">&rarr;</div>
-      
-      <div class="arch-box">
-        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="POST" class="arch-icon">
-        <div class="arch-title">POST to S3</div>
-      </div>
-      
-      <!-- Empty space in middle -->
-      <div class="empty-space"></div>
-      
-      <div class="arch-box">
-        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="GET" class="arch-icon">
-        <div class="arch-title">GET from S3</div>
-      </div>
-      
-      <div class="arch-arrow">&rarr;</div>
-      
-      <div class="arch-box">
-        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="Export" class="arch-icon">
-        <div class="arch-title">Export</div>
-      </div>
-    </div>
-    
-    <!-- Vertical connectors -->
-    <div class="connector-container">
-      <div class="vertical-arrow" style="margin-left: 105px;">&darr;</div>
-      <div class="vertical-arrow" style="margin-right: 105px; transform: rotate(180deg);">&darr;</div>
-    </div>
-    
-    <!-- Bottom row - Backend services -->
-    <div class="backend-row">
-      <div class="arch-box s3">
-        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="S3" class="arch-icon">
-        <div class="arch-title">S3 Bucket</div>
-      </div>
-      
-      <div class="arch-arrow">&rarr;</div>
-      
-      <div class="arch-box lambda">
-        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="Lambda" class="arch-icon">
-        <div class="arch-title">Lambda</div>
-      </div>
-      
-      <div class="arch-arrow">&rarr;</div>
-      
-      <div class="arch-box s3">
-        <img src="https://www.svgrepo.com/show/498792/cube-unfolded.svg" alt="S3" class="arch-icon">
-        <div class="arch-title">S3 Bucket</div>
+      <div class="image-container">
+        <div class="architecture-diagram">
+          <div class="arch-container">
+            <!-- Top row - User flow -->
+            <div class="user-flow-row">
+              <div class="arch-box">
+                <img src="https://www.svgrepo.com/show/533718/upload.svg" alt="User Upload" class="arch-icon">
+                <div class="arch-title">User Uploads STL</div>
+              </div>
+              
+              <div class="arch-arrow">&rarr;</div>
+              
+              <div class="arch-box">
+                <img src="https://www.svgrepo.com/show/408817/bucket.svg" alt="POST" class="arch-icon">
+                <div class="arch-title">POST to S3 Bucket</div>
+              </div>
+              
+              <!-- Empty space in middle -->
+              <div class="empty-space"></div>
+              
+              <div class="arch-box">
+                <img src="https://www.svgrepo.com/show/408817/bucket.svg" alt="GET" class="arch-icon">
+                <div class="arch-title">GET from S3 Bucket</div>
+              </div>
+              
+              <div class="arch-arrow">&rarr;</div>
+              
+              <div class="arch-box">
+                <img src="https://www.svgrepo.com/show/533682/download.svg" alt="Export" class="arch-icon">
+                <div class="arch-title">Export Your STEP</div>
+              </div>
+            </div>
+            
+            <!-- Vertical connectors -->
+            <div class="connector-container">
+              <div class="vertical-arrow" style="margin-left: 105px;">&darr;</div>
+              <div class="vertical-arrow" style="margin-right: 105px; transform: rotate(180deg);">&darr;</div>
+            </div>
+            
+            <!-- Bottom row - Backend services -->
+            <div class="backend-row">
+              <div class="arch-box s3">
+                <img src="https://www.svgrepo.com/show/472029/upload-cloud-01.svg" alt="S3" class="arch-icon">
+                <div class="arch-title">S3 Uploads Bucket</div>
+              </div>
+              
+              <div class="arch-arrow">&rarr;</div>
+              
+              <div class="arch-box lambda">
+                <img src="https://www.svgrepo.com/show/448300/aws-lambda.svg" alt="Lambda" class="arch-icon">
+                <div class="arch-title">Lambda Cloud Computing</div>
+              </div>
+              
+              <div class="arch-arrow">&rarr;</div>
+              
+              <div class="arch-box s3">
+                <img src="https://www.svgrepo.com/show/502631/download-cloud-1.svg" alt="S3" class="arch-icon">
+                <div class="arch-title">S3 Downloads Bucket</div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
 </div>
 
-
       </div>
     </div>
+  </div>
   
   <footer>
     <div class="footer-content">
