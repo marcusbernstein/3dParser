@@ -51,16 +51,22 @@ h1 {
 
 .upload-area {
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 15px;
-  margin: 0;
-  flex-wrap: wrap; /* Allow wrapping on smaller screens */
+  width: 100%;
+  margin-bottom: 20px; /* Space between upload area and status/download */
 }
 
 .file-input-container {
-  flex: 1 1 250px; /* Grow, shrink, and base width */
-  position: relative;
-  min-width: 0; /* Allow text to truncate */
+  width: 100%;
+  max-width: 100%; /* Allow container to fill available space */
+}
+
+.primary-button {
+  margin-top: 10px;
+  width: 100%;
+  max-width: 300px; /* Or whatever width works best */
 }
 
 #file-input {
@@ -416,6 +422,26 @@ footer a:hover {
 }
 
 @media (max-width: 768px) {
+  
+  @media (max-width: 768px) {
+  .upload-area {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px; /* Controls spacing between elements */
+  }
+  
+  .file-input-container {
+    width: 100%;
+    max-width: 300px; /* Adjust as needed */
+  }
+  
+  
+  .primary-button {
+    margin-top: 10px;
+    width: 100%;
+    max-width: 300px; /* Match container width */
+  }
   .content-with-image {
     flex-direction: column;
   }
@@ -469,11 +495,6 @@ footer a:hover {
     display: none;
   }
 }
-.architecture-diagram {
-  margin: 20px auto;
-  width: 100%;
-  max-width: 650px;
-}
 
 .arch-container {
   display: flex;
@@ -512,32 +533,6 @@ footer a:hover {
   text-align: center;
 }
 
-.arch-box {
-  width: 80px;
-  height: 60px;
-  border: 2px solid #4361ee;
-  border-radius: 6px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 6px;
-  background-color: #f8f9fa;
-  position: relative;
-  overflow: hidden;
-  margin: 0 5px;
-}
-
-.arch-box:before {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 4px;
-  background-color: #4361ee;
-  transition: height 0.3s;
-}
-
 .arch-box.lambda {
   border-color: #e74c3c;
 }
@@ -555,8 +550,8 @@ footer a:hover {
 }
 
 .arch-icon {
-  width: 24px;
-  height: 24px;
+  width: 16px;
+  height: 16px;
   margin: 4px auto 0;
   display: block;
 }
@@ -573,13 +568,13 @@ footer a:hover {
   font-size: 16px;
   color: #4361ee;
   font-weight: bold;
-  margin: 0 5px;
+  margin: 0;
 }
 
 .empty-space {
   width: 80px;
   opacity: 0;
-  margin: 0 5px;
+  margin: 0;
 }
 
 .error-link {
@@ -595,4 +590,132 @@ footer a:hover {
   font-weight: bold;
   color: #74b9ff; /* Light blue that matches the link color */
   margin-right: 4px;
+}
+
+.architecture-container {
+  width: 100%;
+  margin: 15px 0;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.architecture-diagram {
+  width: 100%;
+  max-width: 650px;
+  margin: 0 auto;
+}
+
+/* Fluid sizing for arch boxes */
+.arch-box {
+  width: 90px;
+  height: 60px;
+  border: 2px solid #4361ee;
+  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 6px;
+  background-color: #f8f9fa;
+  position: relative;
+  overflow: hidden;
+  margin: 0 5px;
+  box-sizing: border-box;
+}
+
+.arch-box:before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background-color: #4361ee;
+  transition: height 0.3s;
+}
+
+/* Mobile styles */
+@media (max-width: 768px) {
+  /* Smaller architecture diagram */
+  .architecture-diagram {
+    transform-origin: top left;
+    transform: scale(0.85);
+    margin: 0;
+  }
+  
+  /* Scalable arch boxes */
+  .arch-box {
+    width: 70px;
+    height: 50px;
+    padding: 4px;
+    margin: 0 3px;
+  }
+  
+  .arch-icon {
+    width: 16px;
+    height: 16px;
+    margin: 2px auto 0;
+  }
+  
+  .arch-title {
+    font-size: 8px;
+    margin-top: 3px;
+  }
+  
+  .arch-arrow {
+    font-size: 14px;
+    margin: 0;
+  }
+  
+  .connector-container {
+    width: 330px;
+  }
+  
+  .vertical-arrow {
+    font-size: 14px;
+  }
+}
+
+/* Very small screens */
+@media (max-width: 480px) {
+  /* Even smaller scaling */
+  .architecture-diagram {
+    transform: scale(0.9);
+  }
+  
+  /* Hide icons at very small sizes */
+  
+  .arch-box {
+    height: 65px;
+    width: 40px;
+    justify-content: center;
+  }
+  
+  .arch-title {
+    margin-top: 0;
+  }
+}
+
+/* Fix for upload area */
+.upload-area {
+  display: flex;
+  align-items: center;
+  gap: 15px;
+  margin: 0;
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .upload-area {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  
+  .file-input-container {
+    max-width: 100%;
+    margin-bottom: 10px;
+  }
+  
+  .primary-button {
+    width: 100%;
+  }
 }
