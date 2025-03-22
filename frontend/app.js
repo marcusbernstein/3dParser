@@ -161,9 +161,11 @@ document.addEventListener('DOMContentLoaded', function() {
       })
       .catch(error => {
         console.error("Request failed:", error);
-        statusDiv.innerHTML = '<span class="status-error">Error: ' + error.message + '</span>';
-        
-        // Additional error details
+
+        // Custom message for all errors with GitHub link
+        statusDiv.innerHTML = '<span class="status-error">Error: your file has too many triangles and exceeds limits of AWS Student Tier. For local hosting, download the Python code from <a href="https://github.com/marcusbernstein/3dParser/tree/main" target="_blank" class="error-link">here</a> or contact me at marcus.bernstein@gwu.edu for local hosting</span>';
+
+        // Still log the actual error to console for debugging
         if (error.name === 'SyntaxError') {
           console.error("Response was not valid JSON - likely a server error");
         } else if (error.name === 'TypeError') {
