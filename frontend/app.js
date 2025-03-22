@@ -16,16 +16,6 @@ document.addEventListener('DOMContentLoaded', function() {
   
   console.log("File converter initialized with API endpoint:", apiEndpoint);
   
-    fetch('https://api.countapi.xyz/hit/stlstep-converter/visits')
-    .then(response => response.json())
-    .then(data => {
-      const counterElement = document.getElementById('usage-counter');
-      if (counterElement) {
-        counterElement.textContent = data.value;
-      }
-    })
-    .catch(error => console.error("Failed to update counter:", error));
-  
   // Update file input label when a file is selected
   fileInput.addEventListener('change', function() {
     if (fileInput.files.length > 0) {
