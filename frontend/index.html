@@ -90,6 +90,7 @@
                     </ul>
                   </div>
                 </div>
+                <p>STEP, and other solid geometries, are easily converted to STL for 3d printing or other applications. No robust converter exists to rebuild this solid geometry from STEP that includes defect handling and curvature rebuilding.</p>
               </div>
               <div class="image-container">
                 <img src="https://i.postimg.cc/WzG2K1Fh/output-9.png" alt="STL vs STEP Comparison" class="panel-image">
@@ -143,7 +144,7 @@ endsolid Mesh</pre>
           <div class="panel-content">
             <div class="content-with-image">
               <div class="text-content">
-                <p>Given those points, and triangle normal vectors,, we need to convert these triangles into solid boundary geometry.</p>
+                <p>Given those points, and triangle normal vectors, we need to convert these triangles into solid boundary geometry.</p>
                 <p>To do that, we search triangles for those that are adjacent (share an edge) and coplanar (normal directions equal, within tolerance).</p> 
                 <p>If triangles meet this criteria, we merge them, and ultimately build robust 2d shapes from their outlines.</p>
               </div>
@@ -161,7 +162,7 @@ endsolid Mesh</pre>
             <div class="content-with-image">
               <div class="text-content">
                 <p>STL files do not store curvature information. Thankfully, using common creation algorithms, we can reverse engineer them.</p>
-                <p>Generally, parts have a 25-gon (or similar), are very likely to be circles, especially if they can be built tangent to existing faces or create through holes.</p>
+                <p>Generally, parts that have a 25-gon (or similar), are very likely to be circles, especially if they can be built tangent to existing faces or create through holes.</p>
                 <p>When we see patterns that those 25-gons have the same area and incremental angle, after merging triangles and within reasonable tolerances, we can assume that the design intent is rounded faces. By analyzing the total angle and identifying patterns in the points involved, we can build robust curvature that blends with adjacent faces for ultimately watertight geometry.</p>
               </div>
               <div class="image-container">
