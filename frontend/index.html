@@ -130,7 +130,7 @@
     endloop
   endfacet
 endsolid Mesh</pre>
-                <p>You can see how this raw geometric information would be perfect to 3d print a part, but not right to adjust the mug handle or simulate it's strength.</p>
+                <p>You can see how this raw geometric information would be enough to 3d print a part, but not right to adjust the mug handle or simulate it's strength.</p>
               </div>
               <div class="image-container">
                 <img src="https://i.postimg.cc/5ybhz47V/mug3.png" alt="STL vs STEP Comparison" class="panel-image">
@@ -210,7 +210,7 @@ ADVANCED_FACES
         <ul>
           <li>The first step was building an AWS Lambda Function for computing power to handle the conversion. Here I learned the importance of O(n) time complexity, at scale, and needed to restructure some key functions (or pay the price in student AWS credits).</li>
           <li>The Lambda function needed two S3 buckets, one to POST the files for conversion and one to GET the files back to the user. Of course, the files are encrypted, and deleted immediately once converted.</li>
-          <li>Lastly, a simple AWS Amplify frontend was built to handle the host the process and share how it works.</li>
+          <li>Lastly, a simple AWS Amplify frontend was built to host the process and share how it works.</li>
         </ul>
         <p>The code does <strong>not</strong> work perfectly nor universally. Different STL export algorithms run through different processes, and leave random artifacts that I could not catalog let alone incorporate or assign computing power to catch.</p>
         <p>The code could be further improved to handle more complex curvature, guess units based on values (a feature at 25.4 is probably an indicator of mm/in file size), and have better error visualization/validation.</p>
@@ -288,7 +288,7 @@ ADVANCED_FACES
   
   <footer>
     <div class="footer-content">
-      Created by Marcus Bernstein at George Washington University with <a href="https://github.com/marcusbernstein/3dParser/tree/main" target="_blank">codebase here</a>: feel free to use, copy, and improve
+      Created by Marcus Bernstein at George Washington University with <a href="https://github.com/marcusbernstein/3dParser/tree/main" target="_blank">codebase here</a>: feel free to use, copy, and improve.
     </div>
   </footer>
   
