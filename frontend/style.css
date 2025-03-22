@@ -488,6 +488,7 @@ footer a:hover {
   .diagram-row {
     justify-content: center;
   }
+  
 }
 
 .arch-container {
@@ -632,7 +633,6 @@ footer a:hover {
   /* Smaller architecture diagram */
   .architecture-diagram {
     transform-origin: top left;
-    transform: scale(0.95);
     margin: 0;
   }
   
@@ -670,17 +670,10 @@ footer a:hover {
 }
 
 /* Very small screens */
-@media (max-width: 480px) {
-  /* Even smaller scaling */
-  .architecture-diagram {
-    transform: scale(0.9);
-  }
-  
-  /* Hide icons at very small sizes */
-  
+@media (max-width: 480px) {  
   .arch-box {
-    height: 65px;
-    width: 40px;
+    height: 60px;
+    width: 60px;
     justify-content: center;
   }
   
